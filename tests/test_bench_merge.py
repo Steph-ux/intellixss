@@ -17,8 +17,9 @@ from pathlib import Path
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "bench"))
 
-from _psbench import scan_one  # noqa: E402
+from benchmark import scan_one  # noqa: E402
 
 
 class _Severity:
@@ -74,9 +75,9 @@ class _Scanner:
 
 @pytest.mark.asyncio
 async def test_confirmed_finding_survives_the_reflection_lead(monkeypatch):
-    import _psbench
+    import benchmark
 
-    monkeypatch.setattr(_psbench, "Scanner", _Scanner)
+    monkeypatch.setattr(benchmark, "Scanner", _Scanner)
     _Scanner.plans = [
         [
             _Finding("search", "html_attr_href", "reflection"),
@@ -89,9 +90,9 @@ async def test_confirmed_finding_survives_the_reflection_lead(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_later_browser_confirmation_replaces_the_earlier_lead(monkeypatch):
-    import _psbench
+    import benchmark
 
-    monkeypatch.setattr(_psbench, "Scanner", _Scanner)
+    monkeypatch.setattr(benchmark, "Scanner", _Scanner)
     _Scanner.plans = [
         [_Finding("search", "html_attr_href", "reflection")],
         [_Finding("search", "html_attr_href", "browser")],

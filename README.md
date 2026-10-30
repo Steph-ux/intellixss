@@ -146,7 +146,7 @@ score cannot be raised by reporting everything as vulnerable.
 
 Both images come from a real run: `docs/console.png` is the scanner's own
 output, `docs/report.png` the report it wrote. Regenerate with
-`python _shots.py`.
+`python bench/screenshots.py`.
 
 ### Per-lab results
 
@@ -207,6 +207,7 @@ intellixss/
   auth.py     cookies, bearer, basic, form login
   scanner/    orchestrator
   cli.py      console rendering, JSON, exit codes
+bench/        benchmark harness, proof renderer, README table, screenshots
 benchmark/    lab results and the proof pages
 tests/        pytest suite
 ```

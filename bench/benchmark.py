@@ -24,6 +24,7 @@ from intellixss.auth import AuthConfig
 from intellixss.config import Config
 from intellixss.scanner.orchestrator import Scanner
 
+ROOT = Path(__file__).resolve().parent.parent
 BASE = "https://portswigger.net"
 COOKIE_FILE = Path(r"D:\tmp\cookie.py")
 UA = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
@@ -261,7 +262,7 @@ async def scan_one(url: str, extra: list[str] | None = None) -> dict:
 
 
 def _load_report() -> list:
-    p = Path("_psreport.json")
+    p = ROOT / "_psreport.json"
     if not p.exists():
         return []
     try:
@@ -281,7 +282,7 @@ def _save_lab(row: dict) -> None:
     merged = {r["i"]: r for r in _load_report()}
     merged[row["i"]] = row
     rows = [merged[i] for i in sorted(merged)]
-    Path("_psreport.json").write_text(json.dumps(rows, indent=2), encoding="utf-8")
+    (ROOT / "_psreport.json").write_text(json.dumps(rows, indent=2), encoding="utf-8")
 
 
 async def main() -> None:
@@ -333,7 +334,7 @@ async def main() -> None:
     for r in results:
         merged[r["i"]] = r
     rows = [merged[i] for i in sorted(merged)]
-    Path("_psreport.json").write_text(json.dumps(rows, indent=2), encoding="utf-8")
+    (ROOT / "_psreport.json").write_text(json.dumps(rows, indent=2), encoding="utf-8")
     ok = [r for r in rows if r.get("status") == "ok"]
     conf = [r for r in ok if any(f["verified_by"] == "browser" for f in r["findings"])]
     stat = [r for r in ok if r["findings"] and not any(f["verified_by"] == "browser" for f in r["findings"])]

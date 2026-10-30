@@ -39,9 +39,11 @@ credited when a browser observed execution.
 
 | File | Content |
 |------|---------|
-| `_psbench.py` | The harness: launches each lab, scans it, accumulates results |
-| `_psproof.py` | Renders everything below from the accumulated JSON |
-| `_pstable.py` | Console table of the current run |
+| `bench/benchmark.py` | The harness: launches each lab, scans it, accumulates results |
+| `bench/proof.py` | Renders everything below from the accumulated JSON |
+| `bench/table.py` | Console table of the current run |
+| `bench/readme_table.py` | Writes the per-lab table into README.md |
+| `bench/screenshots.py` | Captures README screenshots from a real scan |
 | `results.json` | Machine-readable result, one object per lab |
 | `SUMMARY.md` | The table, the totals, and a note on every non-confirmed lab |
 | `labs/lab-NN.md` | One page per lab: payload, parameter, context, page it fired on |
@@ -49,8 +51,10 @@ credited when a browser observed execution.
 Regenerate after a run:
 
 ```bash
-python _psbench.py          # all 30 labs, ~75 min at 4 req/s
-python _psproof.py          # rebuild the evidence in benchmark/
+python bench/benchmark.py       # all 30 labs, ~75 min at 4 req/s
+python bench/proof.py           # rebuild the evidence in benchmark/
+python bench/readme_table.py    # refresh the table in README.md
+python bench/screenshots.py     # refresh docs/console.png and docs/report.png
 ```
 
 Instance hosts appear in the pages because that is what the scanner saw. A lab

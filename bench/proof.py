@@ -14,7 +14,7 @@ import json
 import shutil
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent
+ROOT = Path(__file__).resolve().parent.parent
 OUT = ROOT / "benchmark"
 REPORT = ROOT / "_psreport.json"
 

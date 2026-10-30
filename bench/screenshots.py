@@ -19,17 +19,17 @@ import subprocess
 import sys
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent
+ROOT = Path(__file__).resolve().parent.parent
 DOCS = ROOT / "docs"
 LAB = "cross-site-scripting/reflected/lab-html-context-nothing-encoded"
 
 
 def launch_lab() -> str | None:
     """Launch the lab through the bench harness, reusing its session."""
-    sys.path.insert(0, str(ROOT))
-    import _psbench  # noqa: PLC0415 - harness is deliberately import-lazy
+    sys.path.insert(0, str(ROOT / "bench"))
+    import benchmark as harness  # noqa: PLC0415 - harness is import-lazy
 
-    return _psbench.launch(LAB)
+    return harness.launch(LAB)
 
 
 def run_scanner(url: str) -> str:

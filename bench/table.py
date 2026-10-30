@@ -1,8 +1,11 @@
 """Render the per-lab benchmark table from the accumulated report."""
 
 import json
+from pathlib import Path
 
-with open("_psreport.json", encoding="utf-8") as fh:
+ROOT = Path(__file__).resolve().parent.parent
+
+with open(ROOT / "_psreport.json", encoding="utf-8") as fh:
     rows = json.load(fh)
 
 rows.sort(key=lambda r: r["i"])

@@ -50,8 +50,8 @@ Developer notes live in `.agent/skills/`:
 Detection changes should be measured, not assumed:
 
 ```bash
-python _psbench.py 0 9      # labs 0..9 (inclusive indices; --list shows them)
-python _psproof.py          # rebuild benchmark/ evidence from results
+python bench/benchmark.py 0 9      # labs 0..9 (inclusive indices; --list shows them)
+python bench/proof.py          # rebuild benchmark/ evidence from results
 ```
 
 A regression on a lab that previously confirmed is a defect. Report it as one
