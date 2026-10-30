@@ -29,6 +29,46 @@ from intellixss.analysis.angular import (
 )
 from intellixss.models import InjectionContext, XSSFinding
 
+# Any identifier immediately followed by "(" - resolved against the function
+# table, so a call site is found in one pass over the bundle.
+_CALL_PATTERN = re.compile(r"\b([A-Za-z_$][\w$]*)\s*\(")
+
+# A variable declaration with a single-line right-hand side. The right-hand
+# side stops before a newline, matching how the propagation rules treat one
+# statement per line.
+_DECL_PATTERN = re.compile(r"(?:var|let|const)\s+([A-Za-z_$][\w$]*)\s*=\s*([^;\n]*)")
+
+# A plain assignment ``name = rhs`` at the start of a statement. Group 1 is None
+# for a compound operator such as ``+=``: those are not a reassignment from
+# scratch, and treat them separately.
+_ASSIGN_PATTERN = re.compile(
+    r"(?:^|[;{}\n])[ \t]*([A-Za-z_$][\w$]*)\s*\+?=\s*([^;=][^;]{0,600})"
+)
+
+# The element a response-body callback binds: ``data.forEach(p => ...)``,
+# ``for (const p of data)``, ``data.map(p => ...)``.
+#
+# The collection name is captured too: only the elements of a *response* are
+# tainted. Binding every callback of the bundle would mark each loop variable
+# of a 1.3 MB SPA as attacker-controlled and make the flow list meaningless.
+_ELEMENT_PATTERN = re.compile(
+    r"\b([A-Za-z_$][\w$.]*)\s*\.\s*(?:forEach|map|flatMap)\s*\(\s*(?:function\s*)?"
+    r"\(?\s*([A-Za-z_$][\w$]*)|"
+    r"\bfor\s*\(\s*(?:var|let|const)\s+([A-Za-z_$][\w$]*)\s+of\s+([A-Za-z_$][\w$.]*)"
+)
+
+
+def _ident_ref(name: str) -> "re.Pattern[str]":
+    """A word-boundary reference to *name*, compiled once per name."""
+    pattern = _IDENT_REF_PATTERN.get(name)
+    if pattern is None:
+        pattern = re.compile(rf"\b{re.escape(name)}\b")
+        _IDENT_REF_PATTERN[name] = pattern
+    return pattern
+
+
+_IDENT_REF_PATTERN: Dict[str, "re.Pattern[str]"] = {}
+
 # (regex, label) — taint origins
 _SOURCE_PATTERNS: List[Tuple[str, str]] = [
     (r"location\.hash", "location.hash"),
@@ -166,11 +206,18 @@ def _match_brace(js: str, open_idx: int) -> int:
 
 
 def _split_args(js: str, open_paren: int, limit: int = 400) -> List[str]:
-    """Split arguments of a call whose ``(`` ends at *open_paren*."""
+    """Split arguments of a call whose ``(`` is at *open_paren*.
+
+    Callers pass the index of the opening parenthesis. The first version of
+    the argument-list rule passed ``m.end()`` (the index just *after* it), so
+    every argument list started one character too late and the URL of a
+    ``fetch`` was read as its own first argument plus the trailing text of
+    the next statement.
+    """
     depth = 1
     args: List[str] = []
     cur: List[str] = []
-    i = open_paren
+    i = open_paren + 1
     n = min(len(js), open_paren + limit)
     while i < n:
         ch = js[i]
@@ -221,7 +268,9 @@ def _functions(js: str) -> Dict[str, Tuple[List[str], str]]:
     return out
 
 
-def _tainted_vars(js: str, rounds: int = 6) -> Dict[str, str]:
+def _tainted_vars(
+    js: str, rounds: int = 6, declaration_only: bool = False
+) -> Dict[str, str]:
     """
     Map variable/parameter name -> source label.
 
@@ -230,16 +279,53 @@ def _tainted_vars(js: str, rounds: int = 6) -> Dict[str, str]:
     a function whose body contains a tainted parameter or a tainted local is
     itself tainted, and passing a tainted value to it taints the parameter
     at every call site.
+
+    *declaration_only* limits the assignment rule to ``var``/``let``/``const``.
+    HTML strings are built by plain assignment too, so the sink-window check
+    keeps the full rule; a callers that only needs the declared names takes
+    the narrow one.
     """
     funcs = _functions(js)
     out: Dict[str, str] = {}
+    # Declarations are indexed once: `const x = ...` never moves, and both
+    # fixed-point passes below read them. Rescanning the bundle per tainted
+    # name made step 4 cost ~50 s per round on a 1.3 MB SPA.
+    decls: List[Tuple[str, str]] = [
+        (m.group(1), m.group(2)) for m in _DECL_PATTERN.finditer(js)
+    ]
+    # Plain assignments, indexed the same way. ``var html = '<b>' + post.message
+    # + '</b>'`` builds the string the sink receives, and a bundle is mostly
+    # plain assignment (minifiers keep ``var``, but templates do not).
+    assigns: List[Tuple[str, str]] = [
+        (m.group(1), m.group(2)) for m in _ASSIGN_PATTERN.finditer(js)
+    ]
+
+    def _referencing(text: str, seen: Set[str]) -> Set[str]:
+        """Names in *seen* that *text* references.
+
+        The taint map is mostly DOM properties (``innerHTML``, ``location``)
+        that no statement mentions by name. Substring tests over *seen* are
+        therefore cheap, and only a name present in the text is worth a
+        compiled word-boundary pattern.
+        """
+        return {n for n in seen if n in text and _ident_ref(n).search(text)}
+
+    # Names bound to a request body. They are the roots of the element rule in
+    # step 2b, and they survive across rounds so a body forwarded through a
+    # local (``data`` -> ``items``) stays a body.
+    tainted_responses: Set[str] = {"responseText", "response"}
 
     def _name_taint(text: str, scope: Dict[str, str]) -> Optional[str]:
         for pat, label in _SOURCE_PATTERNS:
             if re.search(pat, text):
                 return label
         for var, label in scope.items():
-            if re.search(rf"\b{re.escape(var)}\b", text):
+            # A pattern that captures no group yields ``None`` here. Scanning
+            # the map mid-build would then hand ``None`` to ``re.escape`` and
+            # crash on a minified bundle; the exit filter alone is too late.
+            if not isinstance(var, str) or not var or var not in text:
+                continue
+            if _ident_ref(var).search(text):
                 return label
         return None
 
@@ -277,17 +363,75 @@ def _tainted_vars(js: str, rounds: int = 6) -> Dict[str, str]:
         # Without this step a flow that travels through the network
         # (source → request URL → response → eval) looks like two unrelated
         # statements and the sink is never connected to the source.
-        if re.search(r"XMLHttpRequest|fetch\s*\(", js):
+        #
+        # The URL the client built from a source may be *relative*, so the
+        # response the handler reassembles is also client-side. A page that
+        # fetches ``/rest/products/search?q=<attacker>`` and concatenates the
+        # JSON result into ``innerHTML`` is a DOM XSS even though every byte
+        # the server returns is JSON-encoded: nothing on the server decodes
+        # the query, and the sink is in the bundle.
+        if re.search(r"XMLHttpRequest|fetch\s*\(|\$\.(?:get|ajax|post)\s*\(", js):
             request_taint: Optional[str] = None
+            url_args: List[str] = []
             for m in re.finditer(r"\.open\s*\(", js):
-                args = _split_args(js, m.end())
-                for arg in args:
-                    label = _name_taint(arg, out)
-                    if label:
-                        request_taint = label
-                        break
-                if request_taint:
+                # ``open(method, url)``: only the URL reaches the server.
+                args = _split_args(js, m.end() - 1)
+                url_args.extend(args[1:2])
+            for m in re.finditer(r"\$\.(?:get|post)\s*\(|fetch\s*\(", js):
+                # The URL is the call's first argument, and a page may pass it
+                # as a whole expression (``'/search?q=' + q``) rather than an
+                # identifier, so the argument list is judged as written.
+                args = _split_args(js, m.end() - 1)
+                url_args.extend(args[:1])
+            for arg in url_args:
+                label = _name_taint(arg, out)
+                if label:
+                    request_taint = label
                     break
+            # ``await fetch(...)`` / ``await x.json()`` bind the body directly.
+            response_handles: Set[str] = {"responseText", "response"}
+            # The callback that names the body completes a promise chain with
+            # ``=> {`` or ``=>`` followed by a block, and receives the data as
+            # its parameter.
+            for m in re.finditer(
+                r"\)\s*\.\s*then\s*\(\s*(?:function\s*)?\(?\s*([A-Za-z_$][\w$]*)\s*\)?\s*"
+                r"(?:=>|\{)(?!\s*[.\w$]+\s*\.\s*(?:json|text))",
+                js,
+            ):
+                response_handles.add(m.group(1))
+            for m in re.finditer(
+                r"(?:var|let|const)\s+([A-Za-z_$][\w$]*)\s*=\s*await\s+"
+                r"(?:fetch\s*\(|axios|\$\.(?:get|ajax|post))",
+                js,
+            ):
+                response_handles.add(m.group(1))
+            for m in re.finditer(
+                r"(?:var|let|const)\s+([A-Za-z_$][\w$]*)\s*=\s*"
+                r"await\s+[A-Za-z_$][\w$.]*\s*\.\s*(?:json|text)\s*\(",
+                js,
+            ):
+                response_handles.add(m.group(1))
+
+            # ``for (x of data)`` / ``forEach(x => ...)``: the response body is
+            # what the callback receives, so the elements are that response.
+            # Without this rule the JSON a page fetches never reaches the sink.
+            #
+            # Only a chain rooted at the response is followed. A bundle binds
+            # thousands of callbacks over UI collections, and marking every one
+            # of them attacker-controlled would fill the flow list with names
+            # that mean nothing.
+            for m in _ELEMENT_PATTERN.finditer(js):
+                collection = m.group(1) or m.group(4)
+                element = m.group(2) or m.group(3)
+                if collection in response_handles and element:
+                    response_handles.add(element)
+            # The body and its bound elements are tainted by the request, not
+            # only by name: the sink is reached through ``p`` and the string it
+            # builds, and neither mentions the URL. The label is the source the
+            # URL was built from when there is one.
+            label = request_taint or "URL parameter"
+            for name in response_handles:
+                out.setdefault(name, label)
             if request_taint:
                 for resp in ("responseText", "response"):
                     out.setdefault(resp, request_taint)
@@ -301,34 +445,57 @@ def _tainted_vars(js: str, rounds: int = 6) -> Dict[str, str]:
                     out.setdefault(m.group(1), request_taint)
 
         # 3) call sites: includeGadget(getGadgetName()) taints `url`
-        for fname, (params, _body) in funcs.items():
-            call_re = re.compile(rf"\b{re.escape(fname)}\s*\(")
-            for cm in call_re.finditer(js):
-                before = js[max(0, cm.start() - 12) : cm.start()]
-                if before.rstrip().endswith("function"):
-                    continue  # the definition itself, not a call
-                args = _split_args(js, cm.end())
-                for idx, arg in enumerate(args):
-                    label: Optional[str]
-                    if arg.endswith("()") and arg in out:
-                        label = out[arg]
-                    elif re.fullmatch(r"[A-Za-z_$][\w$]*", arg) and arg in out:
-                        label = out[arg]
-                    else:
-                        label = _name_taint(arg, out)
-                    if label and idx < len(params):
-                        out.setdefault(params[idx], label)
+        #
+        # The bundle is indexed once rather than rescanned with one regex per
+        # function name. That scan is quadratic: on a minified 1.3 MB SPA it
+        # cost 24 s per round, and a scan that never returns is worse than a
+        # missed chain.
+        for m in _CALL_PATTERN.finditer(js):
+            fname = m.group(1)
+            func = funcs.get(fname)
+            if func is None:
+                continue
+            params = func[0]
+            before = js[max(0, m.start() - 12) : m.start()]
+            if before.rstrip().endswith("function"):
+                continue  # the definition itself, not a call
+            args = _split_args(js, m.end() - 1)
+            for idx, arg in enumerate(args):
+                label: Optional[str]
+                if arg.endswith("()") and arg in out:
+                    label = out[arg]
+                elif re.fullmatch(r"[A-Za-z_$][\w$]*", arg) and arg in out:
+                    label = out[arg]
+                else:
+                    label = _name_taint(arg, out)
+                if label and idx < len(params):
+                    out.setdefault(params[idx], label)
 
         # 4) assignment propagation: a = tainted_b
+        #
+        # A tainted value reaches a variable through any right-hand side that
+        # mentions it, not only through a ``var`` declaration: the concatenation
+        # pattern ``var html = '<b>' + post.message + '</b>'`` builds the string
+        # in a plain assignment. Continuing the chain from the *declaration* to
+        # the name being assigned is what makes the endpoint-encoding case
+        # connectable at all: ``search?q=`` never appears verbatim in the bundle.
+        #
+        # The tainted names are the index: a statement is only tested with a
+        # compiled word-boundary pattern when it mentions the name at all.
+        # Testing every (name, statement) pair cost 53 million regex compiles
+        # on a minified bundle; the substring test removes almost all of them.
         for name, label in list(out.items()):
-            if not isinstance(name, str):
+            if not isinstance(name, str) or not name:
                 continue
             base = name[:-2] if name.endswith("()") else name
-            for m in re.finditer(
-                rf"(?:var|let|const)\s+([A-Za-z_$][\w$]*)\s*=\s*[^;\n]*\b{re.escape(base)}\b",
-                js,
-            ):
-                out.setdefault(m.group(1), label)
+            ref = _ident_ref(base)
+            for target, rhs in decls:
+                if base in rhs and ref.search(rhs):
+                    out.setdefault(target, label)
+            if not declaration_only:
+                for target, rhs in assigns:
+                    if base in rhs and ref.search(rhs):
+                        out.setdefault(target, label)
 
         if len(out) == before:
             break
@@ -381,10 +548,18 @@ def analyze_dom_flows(
 
     *external_js* carries the bodies of the page's own ``<script src=…>``
     files; without them a page whose sink lives in a bundled script looks like
-    it has no flow at all.
+    it has no flow at all. A body passed in *html* with no ``<script>`` wrapper
+    is analysed as written: ``"/\\n".join([])`` is a blank line, and treating
+    that as the whole script discarded every flow of a caller that already
+    extracted the body.
     """
-    js = "\n".join(_scripts(html, external_js))
-    if not js:
+    scripts = _scripts(html, external_js)
+    js = "\n".join(scripts)
+    if html and not scripts and "<script" not in html.lower():
+        # A caller that passes the body itself instead of a document.
+        scripts = [html]
+        js = html
+    if not js.strip():
         return []
 
     tainted = _tainted_vars(js)
@@ -410,13 +585,17 @@ def analyze_dom_flows(
                 continue
             # via variable: any tainted var name appears in the sink window
             via = next(
-                (src for var, src in tainted.items() if re.search(rf"\b{re.escape(var)}\b", window)),
+                (
+                    src
+                    for var, src in tainted.items()
+                    if isinstance(var, str) and var and var in window and _ident_ref(var).search(window)
+                ),
                 None,
             )
             if via:
                 flows.append((via, sink, family))
 
-    flows.extend(_concat_flows(js))
+    flows.extend(_concat_flows(js, tainted))
 
     # de-duplicate, keep order
     seen = set()
@@ -429,7 +608,9 @@ def analyze_dom_flows(
     return out
 
 
-def _concat_flows(js: str) -> List[Tuple[str, str, str]]:
+def _concat_flows(
+    js: str, tainted: Optional[Dict[str, str]] = None
+) -> List[Tuple[str, str, str]]:
     """Flows where a tainted value is *concatenated* into HTML, then assigned
     to a DOM sink.
 
@@ -442,6 +623,8 @@ def _concat_flows(js: str) -> List[Tuple[str, str, str]]:
     :func:`analyze_dom_flows` misses it. Here the strings that are built by
     concatenation and later written to an HTML sink are collected, and any
     tainted value appended to them counts as reaching that sink.
+
+    *tainted* is the caller's taint map; recomputing it here doubled the scan.
     """
     # Names assigned an HTML sink: el.innerHTML += html / innerHTML = html
     sink_targets: Dict[str, str] = {}
@@ -473,28 +656,37 @@ def _concat_flows(js: str) -> List[Tuple[str, str, str]]:
         convolved.add(m.group(1))
 
     # a = '...' + html  — assign a literal prefix at the *start* of a statement.
-    # One alternation is tried per convolved name, so the pattern is compiled
-    # once per name and bounded to a single statement: an unbounded ``[^;]``
-    # under ``re.S`` backtracks catastrophically on a minified bundle.
+    #
+    # One anchored scan collects every assignment statement of the bundle and
+    # keeps the ones whose right-hand side mentions a name already known to
+    # grow. That is a fixed point over names, not over positions: rescanning
+    # the whole bundle once per name cost 109 s on a minified SPA and could
+    # still add nothing, because the names only become known as the scan
+    # proceeds.
+    stmt_re = re.compile(
+        r"(?:^|[;{}\n])[ \t]*(?:var|let|const)?\s*([A-Za-z_$][\w$]*)\s*=\s*"
+        r"([^;=][^;]{0,600})",
+        re.S,
+    )
+    statements = [(m.group(1), m.group(2)) for m in stmt_re.finditer(js)]
     for _ in range(4):
         grew = False
-        for name in list(convolved):
-            assign_re = re.compile(
-                rf"(?:^|[;{{}}\n])[ \t]*(?:var|let|const)?\s*([A-Za-z_$][\w$]*)\s*=\s*"
-                rf"[^;=][^;]{{0,600}}\b{re.escape(name)}\b(?!\s*(?:\.|\[))",
-                re.S,
-            )
-            for m in assign_re.finditer(js):
-                if m.group(1) not in convolved:
-                    convolved.add(m.group(1))
+        for target, rhs in statements:
+            if target in convolved:
+                continue
+            for name in convolved:
+                if _ident_ref(name).search(rhs):
+                    convolved.add(target)
                     grew = True
+                    break
         if not grew:
             break
 
     # The taint set is global to the script: computing it once costs one pass,
     # while recomputing it per statement was quadratic — on a minified bundle it
     # was the single slowest step of a scan by two orders of magnitude.
-    tainted = _tainted_vars(js)
+    if tainted is None:
+        tainted = _tainted_vars(js)
 
     for name in convolved:
         sink = sink_targets.get(name)
@@ -509,7 +701,13 @@ def _concat_flows(js: str) -> List[Tuple[str, str, str]]:
                 if re.search(pat, built):
                     out.append((label, sink, "html"))
             for var, src in tainted.items():
-                if re.search(rf"\.\s*{re.escape(var)}\b", built):
+                # Only names the statement actually mentions are worth a
+                # compiled pattern. A bare identifier cannot be a substring of
+                # the statement without "in" seeing it first, so this check
+                # skips the great majority on a minified bundle.
+                if not isinstance(var, str) or not var or var not in built:
+                    continue
+                if re.search(rf"\.\s{re.escape(var)}(?![\w$])", built):
                     out.append((src, sink, "html"))
 
     seen = set()

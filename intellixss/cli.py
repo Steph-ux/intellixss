@@ -169,8 +169,16 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _console() -> "Console":
+    # rich enters "legacy Windows" mode inside the PowerShell 5 host, where it
+    # writes styled text straight to a cp1252 stream. The tool's own strings
+    # carry "-", "..." and "->" as their UTF-8 forms, so the first styled line
+    # under that host raised UnicodeEncodeError and killed the scan after the
+    # work was done. Opting out keeps rich emitting ANSI instead, which the
+    # host passes through unchanged.
     return Console(
         force_terminal=sys.stdout.isatty(),
+        force_interactive=False,
+        legacy_windows=False,
         soft_wrap=False,
         highlight=False,
     )
