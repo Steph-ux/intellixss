@@ -602,6 +602,17 @@ def reproduce_command(finding: "XSSFinding") -> str:
     if method == "GET":
         return f"curl -sS {quoted}"
 
+    if method == "CLIENT":
+        # A client-side store (localStorage, in-page JS) has no server request
+        # to replay: the scanner filled the page's own form and submitted it in
+        # a browser. Printing a curl here would name a session that does not
+        # exist, so the line says what must be done instead.
+        return (
+            f"# open {url} in a browser, submit the page's own form with "
+            f"{finding.parameter}={finding.payload} - the value is stored "
+            f"client-side, so no server request reproduces it"
+        )
+
     body = _form_body(finding)
     if not body:
         # The body is not ours to rebuild: it carried a token minted for the

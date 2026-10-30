@@ -59,6 +59,17 @@ def test_post_finding_without_a_body_explains_itself():
     assert "-X POST" not in cmd, "a command that cannot work is not printed"
 
 
+def test_client_stored_is_not_printed_as_a_server_request():
+    """A localStorage finding has no request to replay. Naming a POST session
+    would send the reader after something the scanner never created."""
+    f = _finding("https://t/profile", "<img src=x>", param="content", method="CLIENT")
+    cmd = reproduce_command(f)
+    assert cmd.startswith("# open https://t/profile")
+    assert "localStorage".lower() in cmd.lower() or "client-side" in cmd
+    assert "curl" not in cmd
+    assert "per-session token" not in cmd
+
+
 def test_post_body_is_rebuilt_from_the_record_the_scanner_sent():
     """A form POST is unreadable without its body: the reader has to know
     which sibling fields the handler required."""

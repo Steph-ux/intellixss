@@ -44,6 +44,15 @@ cookies.json
 # the scanner. The supported tree is intellixss/ + intellixss.py.
 legacy/
 
+# MCP tool schemas that were sitting in the project directory. Nothing in the
+# scanner imports them; they are not part of this project.
+mcps/
+
+# Operator notes on isolated artifacts. The note describes directories that are
+# deliberately not tracked, so shipping the note alone advertises material it
+# cannot show.
+_quarantine/
+
 # Editor / OS noise
 .vscode/
 .idea/

