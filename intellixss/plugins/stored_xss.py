@@ -221,6 +221,7 @@ async def _submit(
     data: dict,
     *,
     wrap: str = "",
+    json_body: bool = False,
 ):
     """Submit a field's value, keeping it reachable past a shape validator.
 
@@ -232,7 +233,14 @@ async def _submit(
     *wrap* is the template that carries the value past that check, read from the
     form's own markup by the caller. When it is empty no validator was declared
     and the value is sent bare.
+
+    *json_body* selects the encoding. A target read out of a bundle is an API
+    that parses JSON: sending it form-encoded fields answers ``400`` for a
+    request the endpoint would have accepted, and the field is then written off
+    as unreachable.
     """
+    if json_body:
+        return await client.inject_json(form_url, field, value, base=data, method=method)
     st, body, hdrs, fin = await client.inject(
         form_url, field, value, method=method, base_data=data
     )
@@ -272,6 +280,7 @@ async def scan_server_stored(
     browser=None,
     max_payloads: int = 6,
     log=None,
+    json_body: bool = False,
 ) -> List[XSSFinding]:
     """
     Classic stored XSS:
@@ -327,6 +336,7 @@ async def scan_server_stored(
             method,
             data,
             wrap="" if carries_own_scheme else wrap,
+            json_body=json_body,
         )
 
     # 1) Canary — does storage persist?
@@ -335,8 +345,8 @@ async def scan_server_stored(
     st, body, _, fin = await _send(canary)
     if st == 0:
         return findings
-    if st >= 400 and method.upper() == "POST":
-        log(f"stored: POST {st} on {form_url[:60]} — skipping", "debug")
+    if st >= 400 and (method.upper() == "POST" or json_body):
+        log(f"stored: {method.upper()} {st} on {form_url[:60]} — skipping", "debug")
         return findings
 
     stored = False
@@ -718,12 +728,17 @@ async def scan_stored_auto(
     browser=None,
     targets: Optional[list] = None,
     log=None,
+    page_stages: bool = True,
 ) -> List[XSSFinding]:
     """
     Auto stored-XSS pass:
     - client-side form pages (browser path) on the seed
     - store round-trip pages (localStorage → innerHTML) whose frame is analysed
     - server POST forms with store-like field names
+
+    *page_stages* selects the two browser passes over the seed itself. They are
+    skipped when the caller already drove them, which is what lets the write
+    targets be scanned on their own without a second round through the forms.
     """
     log = log or (lambda *a, **k: None)
     findings: List[XSSFinding] = []
@@ -737,32 +752,43 @@ async def scan_stored_auto(
     # arbitrarily long on a script it cannot fold. Each stage therefore runs
     # under its own wall clock, and a stage that overruns is reported and
     # skipped instead of stalling the scan that is waiting on it.
-    render_url = await _bounded(
-        _store_render_url(client, seed_url, log=log), _STORE_STAGE_SECONDS,
-        log, "store render-url",
-    )
-    if render_url and browser and getattr(browser, "available", False):
-        cf = await _bounded(
-            scan_store_roundtrip(browser, render_url, log=log),
-            _STORE_STAGE_SECONDS, log, "store round-trip",
+    #
+    # A stage that finds something does not end the pass. The page and the
+    # bundle describe different sinks — a SPA renders the complaint form the
+    # browser can drive, while the review API behind it is only named in the
+    # bundle — and stopping at the first hit reported one sink on a site that
+    # stores in three. Every stage runs, and duplicates are collapsed by the
+    # endpoint, parameter and context they were found on.
+    render_url = ""
+    if page_stages:
+        render_url = await _bounded(
+            _store_render_url(client, seed_url, log=log), _STORE_STAGE_SECONDS,
+            log, "store render-url",
         )
-        findings.extend(cf)
-        if cf:
-            return findings
+    if render_url and browser and getattr(browser, "available", False):
+        findings.extend(
+            await _bounded(
+                scan_store_roundtrip(browser, render_url, log=log),
+                _STORE_STAGE_SECONDS, log, "store round-trip",
+            )
+        )
 
     # 1) Client-side on the seed (unique URL, no guessing other paths)
-    if browser and getattr(browser, "available", False):
-        cf = await _bounded(
-            scan_client_stored(browser, seed_url, log=log),
-            _STORE_STAGE_SECONDS, log, "client-stored",
+    if page_stages and browser and getattr(browser, "available", False):
+        findings.extend(
+            await _bounded(
+                scan_client_stored(browser, seed_url, log=log),
+                _STORE_STAGE_SECONDS, log, "client-stored",
+            )
         )
-        findings.extend(cf)
-        if cf:
-            return findings
 
-    # 2) Server-side from discovered POST targets
+    # 2) Server-side from discovered write targets. A record is stored by
+    #    whatever verb its API chose — a review is a ``PUT`` to a product
+    #    resource, not a form post — so the method travels with the target
+    #    instead of being assumed.
     for t in targets or []:
-        if str(getattr(t, "method", "GET")).upper() != "POST":
+        method = str(getattr(t, "method", "GET")).upper()
+        if method in ("GET", "HEAD", "OPTIONS"):
             continue
         params = getattr(t, "params", []) or []
         data = dict(getattr(t, "data", {}) or {})
@@ -770,21 +796,37 @@ async def scan_stored_auto(
         for field in params:
             if field.lower() not in STORE_FIELDS:
                 continue
-            sf = await scan_server_stored(
-                client,
-                url,
-                field=field,
-                method="POST",
-                base_data=data,
-                render_urls=[url, seed_url],
-                browser=browser,
-                log=log,
+            findings.extend(
+                await scan_server_stored(
+                    client,
+                    url,
+                    field=field,
+                    method=method,
+                    base_data=data,
+                    render_urls=[url, seed_url],
+                    browser=browser,
+                    log=log,
+                    json_body=getattr(t, "source", "") == "js_write",
+                )
             )
-            findings.extend(sf)
-            if sf:
-                return findings
 
-    return findings
+    return _distinct(findings)
+
+
+def _distinct(findings: List[XSSFinding]) -> List[XSSFinding]:
+    """One finding per endpoint, parameter and context.
+
+    The stages overlap: the browser stores a record through the same API a
+    bundle target names, so the same sink can be reached twice. The browser
+    evidence wins, because it is the one that proved execution.
+    """
+    best: Dict[tuple, XSSFinding] = {}
+    for f in findings:
+        key = (f.url.rstrip("/"), f.parameter, f.context.value)
+        prior = best.get(key)
+        if prior is None or (prior.verified_by != "browser" and f.verified_by == "browser"):
+            best[key] = f
+    return list(best.values())
 
 
 def _sink_contexts(body: str, canary: str, first) -> List[InjectionContext]:

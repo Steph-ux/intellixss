@@ -189,6 +189,13 @@ class BrowserConfirmer:
         self._budget[host] = left - 1
         return True
 
+    def budget_left(self, url: str) -> int:
+        """Navigations still allowed for *url*'s host (a large number if uncapped)."""
+        cap = self.config.max_confirm_per_host
+        if cap <= 0:
+            return 1 << 30
+        return self._budget.get(urlparse(url).netloc, cap)
+
     # ------------------------------------------------------------------
     # source seeding
     # ------------------------------------------------------------------

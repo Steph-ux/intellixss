@@ -51,8 +51,8 @@ from intellixss.analysis.static_dom import (
 )
 from intellixss.auth import build_auth_cookies, build_auth_headers, form_login
 from intellixss.config import Config
-from intellixss.discovery.targets import discover_targets
-from intellixss.http.client import HttpClient
+from intellixss.discovery.targets import discover_targets, fetch_page_scripts
+from intellixss.http.client import HttpClient, set_hash_query_param
 from intellixss.models import (
     BlockDiagnosis,
     BlockReason,
@@ -132,6 +132,14 @@ _STORED_PASS_SECONDS = 180.0
 # wedged (a page that never finishes loading, a transport that stopped
 # answering) leaves the caller waiting forever. This is the outer backstop.
 _CONFIRM_DEADLINE = 45.0
+
+# Navigations kept in hand for evidence-backed confirmations when a scan also
+# probes client-side routes. A route probe is speculative — the bundle proves
+# the router reads the key, not that the value reaches markup — while a stored
+# sink was written and read back before the browser is asked to run it. When
+# the per-host budget runs out, evidence-backed confirmations are the ones that
+# must still happen, so a speculative probe stops before touching the reserve.
+_CLIENT_ROUTE_RESERVE = 4
 
 _EVENT_CANDIDATES = [
     "onfocus", "onmouseover", "onpointerover", "onanimationstart",
@@ -385,10 +393,30 @@ class Scanner:
         result: ScanResult,
         lock: asyncio.Lock,
     ) -> None:
-        if any(f.vulnerability_type.startswith("stored") for f in result.findings):
-            return
+        # A form is a POST and the reflected pass already drove every one of
+        # them on the page that carries it. An API sink is not a form:
+        # ``PUT /rest/products/1/reviews`` is named only in the bundle and has
+        # no page to submit, so it is reachable from here alone. Returning as
+        # soon as one stored finding existed therefore let a single form sink
+        # hide every API sink on the site.
+        stored_already = any(
+            f.vulnerability_type.startswith("stored") for f in result.findings
+        )
+        if stored_already:
+            targets = [
+                t
+                for t in targets
+                if str(getattr(t, "method", "GET")).upper() not in ("GET", "HEAD", "OPTIONS", "POST")
+            ]
+            if not targets:
+                return
         try:
-            self._log("stored XSS pass (server + client-side forms)", "info")
+            self._log(
+                "stored XSS pass (API write targets)"
+                if stored_already
+                else "stored XSS pass (server + client-side forms)",
+                "info",
+            )
             # The stored pass is a side quest. The browser-driven stages carry
             # their own deadlines, but the *whole* pass still runs while the
             # reflected scan is waiting on the lock that collects its findings,
@@ -399,6 +427,10 @@ class Scanner:
                     client,
                     target_url,
                     browser=self.browser,
+                    # With the page stages already run, only the write targets
+                    # are left. The browser is still needed: an API sink is
+                    # confirmed by rendering the page that reads it back.
+                    page_stages=not stored_already,
                     targets=targets,
                     log=self._log,
                 ),
@@ -621,35 +653,13 @@ class Scanner:
     ) -> List[str]:
         """Fetch the page's own same-origin ``<script src=…>`` bodies.
 
-        Sinks live in bundles, not in the document: a page can name a search
-        script whose ``innerHTML`` assignment is the whole vulnerability. The
-        bodies are cached per scan because several parameters look at the same
-        document, and a third-party host is never fetched — its script cannot
-        be the sink of a parameter the page itself controls.
+        Delegates to :func:`fetch_page_scripts` with the per-scan cache, so the
+        discovery pass and the DOM-flow pass read each bundle once between them.
         """
         cache = getattr(self, "_script_cache", None)
         if cache is None:
             cache = self._script_cache = {}
-        out: List[str] = []
-        for m in re.finditer(
-            r"""<script\b[^>]*\bsrc\s*=\s*["']([^"']+)["']""", body or "", re.I
-        ):
-            src = urljoin(page_url, m.group(1))
-            if urlparse(src).netloc != urlparse(page_url).netloc:
-                continue
-            if src in cache:
-                if cache[src]:
-                    out.append(cache[src])
-                continue
-            try:
-                st, text, _, _ = await client.request("GET", src)
-            except Exception:
-                cache[src] = ""
-                continue
-            cache[src] = text if (st and text) else ""
-            if cache[src]:
-                out.append(cache[src])
-        return out
+        return await fetch_page_scripts(client, body, page_url, cache)
 
     async def _dom_flow_finding(
         self,
@@ -713,6 +723,91 @@ class Scanner:
             self._add(result, finding)
             self._report_finding(finding, ContextAnalysis(context=InjectionContext.HTML_TEXT))
         return True
+
+    async def _scan_client_route(
+        self,
+        client: HttpClient,
+        target: ScanTarget,
+        param: str,
+        result: ScanResult,
+        lock: asyncio.Lock,
+    ) -> None:
+        """Prove a parameter the client router reads, in the browser.
+
+        A hash route never reaches the server: ``/#/search?q=…`` sends only
+        ``/``, so there is no echo to classify and no reflection to confirm.
+        The bundle proved the router reads this key; the browser is then the
+        only honest oracle — it loads the route with the payload in the
+        fragment and reports whether the payload ran. No static claim is made
+        when no browser is available, because nothing else can make one.
+        """
+        if not (self.config.use_browser and self.browser.available):
+            self._log(f"dom    {param}: client route needs a browser", "debug")
+            return
+        # A client route is a guess about where the sink is: the bundle proves
+        # the router reads the key, not that the value reaches markup. A stored
+        # sink is the opposite — the payload was written and read back, and the
+        # browser is only being asked to execute what is already known to be
+        # there. The last navigations on a host are therefore reserved for
+        # those, and a speculative route probe stops before spending them.
+        if self.browser.budget_left(target.url) <= _CLIENT_ROUTE_RESERVE:
+            self._log(
+                f"dom    {param}: confirmation budget reserved for stored sinks",
+                "debug",
+            )
+            return
+        seed = f"{target.url}{param}"
+        marker = make_marker(hashlib.md5(seed.encode()).hexdigest()[:8])
+        # One payload, not a ladder. A reflected parameter shows which context
+        # the value lands in and the ladder is chosen from that echo; a client
+        # route shows nothing — the server never sees the fragment — so there is
+        # no evidence to pick a family from. The generic markup payload is the
+        # only choice that is not a guess, and a second guess would spend a
+        # navigation that an evidence-backed stored confirmation needs: the
+        # per-host budget is what decides whether those get confirmed at all.
+        payload = f"<img src=x onerror=alert('{marker}')>"
+        url = set_hash_query_param(target.url, param, payload)
+        async with lock:
+            result.stats.requests += 1
+        try:
+            br = await asyncio.wait_for(
+                self.browser.confirm(
+                    url,
+                    context_hint=InjectionContext.HTML_TEXT.value,
+                    payload=payload,
+                    marker=marker,
+                ),
+                timeout=_CONFIRM_DEADLINE,
+            )
+        except asyncio.TimeoutError:
+            self._log("browser confirm stalled — moving on", "debug")
+            return
+        if not br.confirmed:
+            self._log(f"dom    {param}: route read but no payload fired", "debug")
+            return
+        finding = XSSFinding(
+            url=url,
+            parameter=param,
+            method="GET",
+            context=InjectionContext.HTML_TEXT,
+            payload=payload,
+            evidence=(
+                f"DOM taint: the client router reads {param} from its own "
+                f"query string and the value reaches a sink | browser:{br.detail}"
+                + (f" [{br.dialog_message[:80]}]" if br.dialog_message else "")
+            ),
+            browser_confirmed=True,
+            vulnerability_type="dom",
+            verified_by="browser",
+            confidence=0.97 if br.marker_echoed else 0.85,
+            marker=marker,
+            trigger=br.trigger,
+        )
+        async with lock:
+            self._add(result, finding)
+            self._report_finding(
+                finding, ContextAnalysis(context=InjectionContext.HTML_TEXT)
+            )
 
     async def _scan_href_context(
         self,
@@ -934,6 +1029,12 @@ class Scanner:
                 )
             return
         if not _contains(body, canary):
+            if target.source == "client_route":
+                # The route never reaches the server, so there is nothing to
+                # look for in the response. The bundle proved the router reads
+                # this key; only the browser can say what it does with it.
+                await self._scan_client_route(client, target, param, result, lock)
+                return
             if st >= 400:
                 # A parameter that is validated as a number, an id or a slug
                 # rejects a canary outright, yet the page may still splice *any*

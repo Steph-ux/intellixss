@@ -174,11 +174,14 @@ class HttpClient:
             st, body, hdrs, fin = await self.request("GET", base)
             return st, body, hdrs, f"{fin}#{value}"
         if method.upper() == "GET":
-            injected = (
-                encode_mod.set_query_param_encoded(url, param, value, encoding_level)
-                if encoding_level > 0
-                else _set_query_param(url, param, value)
-            )
+            if is_hash_route(url):
+                injected = set_hash_query_param(url, param, value)
+            elif encoding_level > 0:
+                injected = encode_mod.set_query_param_encoded(
+                    url, param, value, encoding_level
+                )
+            else:
+                injected = _set_query_param(url, param, value)
             return await self.request("GET", injected)
         data = dict(base_data or {})
         data[param] = encode_mod.encode_value(value, encoding_level)
@@ -253,3 +256,24 @@ def _set_query_param(url: str, param: str, value: str) -> str:
     return urlunparse(
         (parsed.scheme, parsed.netloc, parsed.path, parsed.params, new_query, parsed.fragment)
     )
+
+
+def is_hash_route(url: str) -> bool:
+    """True when the URL's route lives in the fragment (``#/search``).
+
+    A hash-routed application reads its query string out of the fragment, not
+    out of the request: ``http://host/#/search?q=…`` sends only ``/`` to the
+    server and the router parses the rest. Writing the value into the real
+    query string reaches the server and no component.
+    """
+    return (urlparse(url).fragment or "").startswith("/")
+
+
+def set_hash_query_param(url: str, param: str, value: str) -> str:
+    """Set *param* inside a hash route's own query string."""
+    parsed = urlparse(url)
+    route, _, query = (parsed.fragment or "").partition("?")
+    pairs = dict(parse_qsl(query, keep_blank_values=True))
+    pairs[param] = value
+    fragment = f"{route}?{urlencode(pairs, doseq=True)}"
+    return urlunparse(parsed._replace(fragment=fragment))

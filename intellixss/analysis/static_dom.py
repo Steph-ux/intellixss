@@ -234,10 +234,10 @@ def _split_args(js: str, open_paren: int, limit: int = 400) -> List[str]:
                 elif js[i] == quote:
                     break
                 i += 1
-        elif ch == "(":
+        elif ch in "([{":
             depth += 1
             cur.append(ch)
-        elif ch == ")":
+        elif ch in ")]}":
             depth -= 1
             if depth == 0:
                 break
