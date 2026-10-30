@@ -21,8 +21,6 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
-import shutil
-import subprocess
 import sys
 import time
 import urllib.error
