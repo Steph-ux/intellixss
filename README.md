@@ -191,6 +191,32 @@ proof.
 The full payload, the page it fired on and the request that reproduces it are
 in `benchmark/results.json`.
 
+### Second platform: OWASP Juice Shop
+
+A lab is shaped like the vulnerability it teaches, so the 30 labs above cannot
+show whether the scanner survives an application that was not built to be
+scanned. Juice Shop 20.3.0 is an Angular application whose document carries no
+form and no endpoint: every write target it finds is read out of a 1.3 MB
+bundle.
+
+| Documented XSS challenge | Sink | Result |
+|---|---|---|
+| API-only XSS | `PUT /rest/products/1/reviews` | reproduced |
+| DOM XSS | `GET /#/search?q=` | reproduced |
+| Server-side XSS Protection | `POST /api/Feedbacks` | clean, as expected |
+
+Two of the nine entries of category `XSS` in the application's own
+`challenges.yml` are reproduced, and a third real sink is confirmed on
+`POST /api/Complaints` that no documented challenge covers.
+`POST /api/Feedbacks` is reported clean because `sanitize-html` with its default
+allow-list stores the payload as text; that clean result is the precision
+counterpart to the confirmations. The six others need an account, an
+attacker-controlled header, an administrator or one exact payload, and this
+roster does not reach them.
+
+Full method, per-surface results and the reason for each miss:
+`benchmark/juiceshop-report.md`.
+
 ## Architecture
 
 ```
