@@ -270,6 +270,20 @@ def _load_report() -> list:
         return []
 
 
+def _save_lab(row: dict) -> None:
+    """Persist one lab as soon as it is measured.
+
+    The report accumulates (a slice must not erase earlier labs), and the
+    write happens per lab: a run that dies on lab 29 has already stored the
+    twenty-eight results before it. Writing once at the end loses the whole
+    run to a single crash, which is exactly what happened before this.
+    """
+    merged = {r["i"]: r for r in _load_report()}
+    merged[row["i"]] = row
+    rows = [merged[i] for i in sorted(merged)]
+    Path("_psreport.json").write_text(json.dumps(rows, indent=2), encoding="utf-8")
+
+
 async def main() -> None:
     args = sys.argv[1:]
     if "--list" in args:
@@ -294,7 +308,9 @@ async def main() -> None:
         inst = launch(path)
         if not inst:
             print("    SKIP (no instance)", flush=True)
-            results.append({"i": i, "path": path, "diff": diff, "fam": fam, "status": "no-instance"})
+            row = {"i": i, "path": path, "diff": diff, "fam": fam, "status": "no-instance"}
+            results.append(row)
+            _save_lab(row)
             continue
         print(f"    instance {inst}", flush=True)
         pages = discover_pages(inst)
@@ -306,7 +322,9 @@ async def main() -> None:
               f"conf={len(conf)} static={len(static)} pages={1 + len(pages)}", flush=True)
         for f in res["findings"][:4]:
             print(f"        {f['verified_by']:7} {f['ctx']:20} {f['payload'][:52]!r}", flush=True)
-        results.append({"i": i, "path": path, "diff": diff, "fam": fam, "instance": inst, **res})
+        row = {"i": i, "path": path, "diff": diff, "fam": fam, "instance": inst, **res}
+        results.append(row)
+        _save_lab(row)
 
     # The report accumulates: a bench that only ran slice ``22..25`` must not
     # erase the eighteen labs measured before it. Rows are keyed by lab index
