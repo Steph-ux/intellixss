@@ -1,4 +1,4 @@
-# IntelliXSS v3.3
+# IntelliXSS
 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue)](requirements.txt)
 [![Tests](https://img.shields.io/badge/tests-283%20passing-brightgreen)](#tests)
