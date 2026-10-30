@@ -1,0 +1,154 @@
+[
+  {
+    "key": "home",
+    "status": "ok",
+    "findings": [],
+    "requests": 68,
+    "targets": 38,
+    "secs": 51.3,
+    "surface": {
+      "key": "home",
+      "page": "/",
+      "endpoint": "",
+      "field": "",
+      "note": "Angular single-page app. The scanner is pointed at the shell and must reach the API sinks through the bundle alone: there is no form and no server-rendered document to read them from."
+    }
+  },
+  {
+    "key": "search",
+    "status": "ok",
+    "findings": [
+      {
+        "param": "q",
+        "ctx": "html_text",
+        "verified_by": "browser",
+        "payload": "<img src=x onerror=alert('ixm03bac14b')>",
+        "type": "dom",
+        "method": "GET",
+        "url": "http://127.0.0.1:3000/#/search?q=%3Cimg+src%3Dx+onerror%3Dalert%28%27ixm03bac14b%27%29%3E",
+        "marker": "ixm03bac14b",
+        "replay": {
+          "status": 0,
+          "echoed": false,
+          "stored": false,
+          "dom": true,
+          "marker": "ixm03bac14b",
+          "note": "hash route \u2014 execution is browser-only"
+        }
+      }
+    ],
+    "requests": 68,
+    "targets": 38,
+    "secs": 52.1,
+    "surface": {
+      "key": "search",
+      "challenge": "localXssChallenge",
+      "page": "/",
+      "endpoint": "/rest/products/search",
+      "route": "/search",
+      "field": "q",
+      "note": "`GET /rest/products/search?q=` is interpolated into SQL and its JSON is written to the page through `bypassSecurityTrustHtml`; the client sends the query in a fragment, so the server never sees it."
+    }
+  },
+  {
+    "key": "reviews",
+    "status": "ok",
+    "findings": [
+      {
+        "param": "message",
+        "ctx": "html_text",
+        "verified_by": "browser",
+        "payload": "<img src=x onerror=alert('ixm9638094e')>",
+        "type": "stored",
+        "method": "PUT",
+        "url": "http://127.0.0.1:3000/rest/products/1/reviews",
+        "marker": "ixm9638094e",
+        "replay": {
+          "status": 201,
+          "echoed": false,
+          "stored": true,
+          "marker": "ixm9638094e"
+        }
+      }
+    ],
+    "requests": 68,
+    "targets": 38,
+    "secs": 51.8,
+    "surface": {
+      "key": "reviews",
+      "challenge": "restfulXssChallenge",
+      "page": "/",
+      "endpoint": "/rest/products/1/reviews",
+      "field": "message",
+      "method": "PUT",
+      "note": "`PUT /rest/products/1/reviews` stores `message` verbatim, with no authentication; the value is rendered back on the product page."
+    }
+  },
+  {
+    "key": "feedback",
+    "status": "ok",
+    "findings": [],
+    "requests": 68,
+    "targets": 38,
+    "secs": 54.8,
+    "surface": {
+      "key": "feedback",
+      "challenge": "persistedXssFeedbackChallenge",
+      "page": "/",
+      "endpoint": "/api/Feedbacks",
+      "field": "comment",
+      "method": "POST",
+      "note": "`POST /api/Feedbacks` runs `sanitize-html` with the default allow-list."
+    }
+  },
+  {
+    "key": "complaints",
+    "status": "ok",
+    "findings": [
+      {
+        "param": "message",
+        "ctx": "html_text",
+        "verified_by": "browser",
+        "payload": "<img src=x onerror=alert('ixmdd205bea')>",
+        "type": "stored",
+        "method": "POST",
+        "url": "http://127.0.0.1:3000/api/Complaints",
+        "marker": "ixmdd205bea",
+        "replay": {
+          "status": 201,
+          "echoed": true,
+          "stored": true,
+          "marker": "ixmdd205bea"
+        }
+      }
+    ],
+    "requests": 68,
+    "targets": 38,
+    "secs": 51.5,
+    "surface": {
+      "key": "complaints",
+      "page": "/",
+      "endpoint": "/api/Complaints",
+      "field": "message",
+      "method": "POST",
+      "auth": true,
+      "note": "`POST /api/Complaints` needs a session and the captcha the server hands out; the message is stored and shown back to the user."
+    }
+  },
+  {
+    "key": "login",
+    "status": "ok",
+    "findings": [],
+    "requests": 68,
+    "targets": 38,
+    "secs": 51.8,
+    "surface": {
+      "key": "login",
+      "page": "/",
+      "endpoint": "/rest/user/login",
+      "field": "email",
+      "method": "POST",
+      "note": "`POST /rest/user/login` renders an error for unknown credentials; the email field is the reflected sink of the app's own login form."
+    }
+  }
+]
