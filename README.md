@@ -3,7 +3,7 @@
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue)](requirements.txt)
 [![Tests](https://img.shields.io/badge/tests-283%20passing-brightgreen)](#tests)
 [![PortSwigger labs](https://img.shields.io/badge/PortSwigger%20labs-29%2F30%20confirmed-brightgreen)](#accuracy)
-[![License](https://img.shields.io/badge/license-see%20LICENSE-lightgrey)](#license)
+[![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
 XSS scanner built around one rule: a finding is only as strong as the evidence
 behind it. The scanner measures what the target does to a payload - which
@@ -223,8 +223,8 @@ python -m pytest -q
 
 ## License
 
-No license file is included yet, which under copyright means all rights
-reserved: reading and reviewing are fine, redistribution is not. Add a
-`LICENSE` before publishing it as a library or accepting contributions.
+MIT - see [LICENSE](LICENSE). Use it, fork it, ship it inside a commercial
+product, modify it without publishing the changes. No warranty.
 
-Authorized testing only.
+Authorized testing only: run it against systems you own or have written
+permission to test.
