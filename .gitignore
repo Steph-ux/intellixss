@@ -1,0 +1,51 @@
+# Environment and virtualenvs
+.xss/
+.inst_pw/
+venv/
+.venv/
+env/
+ENV/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Scan output: generated, and may carry captured data from a target
+reports/
+*.html
+!tests/**/*.html
+exploit*.json
+exploit*.html
+_quarantine/exploits/
+_quarantine/exploits_bundle/
+
+# Local bench harness state and operator-local helpers
+_psreport.json
+_bench*.log
+_*.log
+benchmark/SUMMARY.md
+benchmark/labs/
+_quarantine/scripts/
+_quarantine/pcaps/
+_psone.py
+
+# Local credential material - never tracked
+cookie.py
+cookies.json
+*.pcap
+*.pcapng
+*.key
+.env
+.env.*
+
+# The pre-v3 monolith and its scanners: reference material only, not part of
+# the scanner. The supported tree is intellixss/ + intellixss.py.
+legacy/
+
+# Editor / OS noise
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini
