@@ -285,6 +285,14 @@ class Scanner:
                     self.browser.set_storage({"token": bearer.split(" ", 1)[1].strip()})
                 except Exception:
                     pass
+            # A cookie session is carried the same way: the page the scan was
+            # given access to is the page a confirmation has to open. A later
+            # form login merges into this jar rather than replacing it.
+            if auth_cookies:
+                try:
+                    self.browser.set_cookies(auth_cookies)
+                except Exception:
+                    pass
 
         try:
             async with HttpClient(

@@ -198,10 +198,16 @@ class BrowserConfirmer:
         are stored with their value only; a ``Secure``/``HttpOnly`` flag cannot
         be expressed once the header is parsed, and neither affects whether the
         page renders the same way for the session.
+
+        Calls accumulate. A configured cookie is offered at startup and the jar
+        a form login fills afterwards arrives as a second call; replacing the
+        first would drop the very session the scan was configured with.
         """
-        self._session_cookies = {
-            str(k): str(v) for k, v in (cookies or {}).items() if str(k)
-        }
+        merged = dict(self._session_cookies)
+        merged.update(
+            {str(k): str(v) for k, v in (cookies or {}).items() if str(k)}
+        )
+        self._session_cookies = merged
 
     def set_storage(self, items: dict) -> None:
         """Offer a token an SPA keeps in ``localStorage`` to every page later.
