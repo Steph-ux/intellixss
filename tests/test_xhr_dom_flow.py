@@ -33,6 +33,56 @@ def test_http_methods_are_not_sinks():
     assert "get" not in _tainted_vars(SEARCH_JS)
 
 
+JQUERY_JS = (
+    "function load(){"
+    " var s = 'x';"
+    " var q = $.getParameter('q');"
+    " $('#out').html(q);"
+    "}"
+)
+
+# The same source in the shape a minifier produces: one declaration statement
+# for the whole local scope, so the source call sits in the middle of the
+# right-hand side rather than at its start.
+MINIFIED_JS = (
+    "function F(){var a=0,b=1,c=2,d=$.getParameter('q'),e=4;$('#o').html(d);}"
+)
+
+
+def test_a_declaration_taints_the_name_the_source_is_assigned_to():
+    taint = _tainted_vars(MINIFIED_JS)
+    assert taint.get("d") == "URL parameter"
+    for neighbour in ("a", "b", "c", "e"):
+        assert neighbour not in taint, neighbour
+
+
+def test_a_discarded_read_does_not_make_its_function_a_source():
+    """Reading a source is not returning it.
+
+    ``$.getParameter('q');`` as a statement throws its value away, so the
+    function around it is not attacker-controlled and ``f()`` names nothing a
+    sink can receive. Binding it anyway told every sink in the file that a URL
+    parameter reaches it, through a call nobody made.
+    """
+    js = (
+        "function f(flag){"
+        " var n = 1;"
+        " $.getParameter('q');"
+        " if(flag){ $('.x').html('<p>static</p>'); }"
+        "}"
+    )
+    assert "f()" not in _tainted_vars(js)
+    assert analyze_dom_flows("", [js]) == []
+
+
+def test_a_function_that_returns_the_source_still_taints_its_call():
+    """The narrowing above must not cut the forwarder it was built around."""
+    js = "function q(){ var v = $.getParameter('q'); return v; }"
+    assert _tainted_vars(js).get("q()") == "URL parameter"
+    jsonp = "function u(){ return $.getParameter('u'); }"
+    assert _tainted_vars(jsonp).get("u()") == "URL parameter"
+
+
 def test_response_inherits_the_taint_of_the_requested_url():
     taint = _tainted_vars(SEARCH_JS)
     assert taint.get("responseText") == "location.search"

@@ -31,9 +31,32 @@ REGEX_FALSE_POSITIVES = {
         "function f(){ const hash = 1; var out = document.getElementById('o'); out.innerHTML = hash; }",
     "parameter shadows the global":
         "var user = location.hash;\nfunction f(user){ el.innerHTML = user; }",
+}
+
+# Cases the regex engine used to report and no longer does, for a reason that is
+# not the statement window: its rules are now exact about which name a value is
+# bound to, and this object is not one of them.
+REGEX_NARROWED = {
     "computed property is not a sink":
         "obj[key] = location.hash; el.innerHTML = obj[key];",
 }
+
+
+@pytest.mark.parametrize("name,js", REGEX_NARROWED.items())
+def test_the_regex_engine_also_drops_what_its_window_invented(name, js):
+    """The floor is only worth keeping where it does not invent a flow.
+
+    ``computed property is not a sink`` used to sit in the false-positive table:
+    the flow was *expected* from the regex engine because the old window reached
+    220 bytes back across the statement boundary and read ``obj[key] =
+    location.hash`` as the source of the next statement's sink. With the window
+    bounded to its own statement the regex engine now agrees with the tree, and
+    the case belongs here — the table above is for defects the regex engine
+    still has, not for ones it has been cured of.
+    """
+    assert _regex(js) == [], f"{name}: the regex engine still invents a flow"
+    assert _tree(js) == [], f"{name}: the tree engine invented a flow"
+
 
 # Cases both engines must keep reporting, so a switch cannot lose them. The
 # request-callback case belongs here: the regex engine reaches it through its

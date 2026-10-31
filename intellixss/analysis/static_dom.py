@@ -40,6 +40,28 @@ _CALL_PATTERN = re.compile(r"\b([A-Za-z_$][\w$]*)\s*\(")
 # statement per line.
 _DECL_PATTERN = re.compile(r"(?:var|let|const)\s+([A-Za-z_$][\w$]*)\s*=\s*([^;\n]*)")
 
+# One declarator of a ``var``/``let``/``const`` statement: the name and the
+# value it is bound to. The value is as long as the declarator, not the line —
+# a minifier puts the whole local scope in one statement — so it ends at the
+# ``;`` or at the ``,`` that starts the next name. An inner call is kept whole
+# through the one level of parentheses the common shapes need
+# (``getParameter('q')``, ``x.y(id)``); anything deeper is cut at its comma and
+# read by the call-site rule instead.
+#
+# The value stops at the first ``,`` outside the one parenthesised call it may
+# contain, so a name is only ever bound to *its own* value. The rule this
+# replaces matched ``var <name> = [^;\n]* <source>``: ``$.getParameter(``
+# starts with a ``.`` that the pattern accepted anywhere on the line, so a
+# whole minified declaration list bound every name in it to the source found
+# in the last one. On the bundle that tainted 1990 names, most of them a
+# single letter, and every sink in the file inherited a source that reaches
+# none of them.
+_DECLARATOR_PATTERN = re.compile(
+    r"((?:(?:var|let|const)\s+)|(?:,\s*)?)"
+    r"([A-Za-z_$][\w$]*)\s*=\s*"
+    r"((?:[^,;\n(]*(?:\([^,;\n]*\))?[^,;\n]*))"
+)
+
 # A plain assignment ``name = rhs`` at the start of a statement. Group 1 is None
 # for a compound operator such as ``+=``: those are not a reassignment from
 # scratch, and treat them separately.
@@ -74,7 +96,14 @@ _IDENT_REF_PATTERN: Dict[str, "re.Pattern[str]"] = {}
 # (regex, label) — taint origins
 _SOURCE_PATTERNS: List[Tuple[str, str]] = [
     (r"location\.hash", "location.hash"),
-    (r"\bhash\b(?!\s*=)", "location.hash"),
+    # The shorthand a page writes once it has read the fragment into a local:
+    # ``var hash = location.hash`` then ``el.innerHTML = hash``. It must be an
+    # *identifier*: ``,``/``{``/``[``/``(`` before it or an object key or a
+    # string ``'hash'`` all mean the word, not the fragment. Accepting the word
+    # anywhere bound a one-letter minified variable through a Lodash chain
+    # (``t[typeof a==`string`?`string`:`hash`]``) and credited twenty sinks
+    # with a source that reaches none of them.
+    (r"(?<![\w$.'\"`])hash\b(?!\s*[:=])", "location.hash"),
     (r"location\.search", "location.search"),
     (r"location\.href", "location.href"),
     (r"document\.URL", "document.URL"),
@@ -285,6 +314,18 @@ def _functions(js: str) -> Dict[str, Tuple[List[str], str]]:
     return out
 
 
+def _reads_without_returning(body: str) -> bool:
+    """*body* computes a value and drops it: no ``return`` carries one out.
+
+    ``$.getParameter('q');`` on its own statement is a read whose result is
+    thrown away, so the function around it hands nothing to a caller. A body
+    with any ``return`` may still be the forwarder the rule exists for, so it
+    is kept: an over-report here costs one flow, an under-report costs the
+    chain.
+    """
+    return re.search(r"\breturn\b", body) is None
+
+
 def _tainted_vars(
     js: str, rounds: int = 6, declaration_only: bool = False
 ) -> Dict[str, str]:
@@ -307,8 +348,13 @@ def _tainted_vars(
     # Declarations are indexed once: `const x = ...` never moves, and both
     # fixed-point passes below read them. Rescanning the bundle per tainted
     # name made step 4 cost ~50 s per round on a 1.3 MB SPA.
+    #
+    # One entry per declarator, each paired with its own value. Indexing the
+    # whole statement under its first name pairs every later name with the
+    # statement's last value: in a minified ``var a=0,b=$.getParameter()`` the
+    # chain ``$.`` -> ``a`` was drawn from a value ``a`` never held.
     decls: List[Tuple[str, str]] = [
-        (m.group(1), m.group(2)) for m in _DECL_PATTERN.finditer(js)
+        (m.group(2), m.group(3)) for m in _DECLARATOR_PATTERN.finditer(js)
     ]
     # Plain assignments, indexed the same way. ``var html = '<b>' + post.message
     # + '</b>'`` builds the string the sink receives, and a bundle is mostly
@@ -350,19 +396,19 @@ def _tainted_vars(
         before = len(out)
 
         # 1) locals assigned from a source:  var x = location.hash.substr(1)
+        #
+        # The name bound is the declarator whose *value* carries the source, and
+        # a value ends at the ``;`` or the ``,`` that starts the next one — a
+        # minified statement is the whole local scope
+        # (``var a=0,b=1,d=$.getParameter('q')``). Every declarator is read,
+        # not just the first: after a comma a name has no ``var`` in front of
+        # it, and those are the names a minified bundle keeps. A bare
+        # assignment is left to the separate rule below, because ``obj.prop =
+        # …`` is not a local and must not poison the map with a missing group.
         for pat, label in _SOURCE_PATTERNS:
-            for m in re.finditer(
-                rf"(?:var|let|const)\s+([A-Za-z_$][\w$]*)\s*=\s*[^;\n]*{pat}", js
-            ):
-                out.setdefault(m.group(1), label)
-        # A bare assignment only taints a *local*: ``window.name = …`` assigns
-        # to a property, and treating it as a variable would poison the map
-        # with a missing group.
-        for pat, label in _SOURCE_PATTERNS:
-            for m in re.finditer(
-                rf"(?<![.\w$])([A-Za-z_$][\w$]*)\s*=\s*[^=;\n][^;\n]*{pat}", js
-            ):
-                out.setdefault(m.group(1), label)
+            for m in _DECLARATOR_PATTERN.finditer(js):
+                if re.search(pat, m.group(3)):
+                    out.setdefault(m.group(2), label)
 
         # 2) functions returning / forwarding a tainted value become "name()"
         for fname, (params, body) in funcs.items():
@@ -371,8 +417,15 @@ def _tainted_vars(
                 {k: v for k, v in out.items() if isinstance(k, str) and not k.endswith("()")}
             )
             label = _name_taint(body, scope)
-            if label:
-                out.setdefault(f"{fname}()", label)
+            if not label:
+                continue
+            # A function that only *calls* a source returns nothing from it:
+            # ``$.getParameter('q');`` on its own line is a read whose value is
+            # discarded, and the function's own name is not attacker-controlled.
+            # ``name()`` is bound to the functions that hand a value back.
+            if _reads_without_returning(body):
+                continue
+            out.setdefault(f"{fname}()", label)
 
         # 2b) XHR responses carry the taint of the URL they requested.
         # ``xhr.open('GET', path + location.search)`` sends a URL the attacker
@@ -529,7 +582,20 @@ def _sink_window(js: str, sink_pos: int) -> str:
     ``document.write('<img …>' + query)`` because the tainted identifier sits
     after the match, and widening blindly would pull in unrelated statements.
     """
-    head = js[max(0, sink_pos - 220) : sink_pos]
+    # The head stops at the statement boundary before the sink. A fixed width
+    # crossed it: in ``$.getParameter('q'); if (f) { $('.x').html('<p>'); }``
+    # the 220 bytes before the sink include the previous statement, so the
+    # source was read as reaching a sink nothing passes it to. A sink's data is
+    # what its own statement gives it.
+    start = max(0, sink_pos - 220)
+    boundary = max(
+        js.rfind(";", start, sink_pos),
+        js.rfind("{", start, sink_pos),
+        js.rfind("}", start, sink_pos),
+    )
+    if boundary != -1:
+        start = boundary + 1
+    head = js[start:sink_pos]
     # Walk to the closing paren of the call, honouring nested parens and quotes.
     depth = 0
     quote = ""
