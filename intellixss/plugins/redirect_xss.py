@@ -9,6 +9,7 @@ from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 from intellixss.http.client import HttpClient
 from intellixss.models import InjectionContext, XSSFinding
+from intellixss.payloads.generator import make_marker, mark_call
 
 REDIRECT_PARAMS = [
     "redirect",
@@ -30,6 +31,15 @@ PAYLOADS = [
 ]
 
 
+def redirect_payloads(marker: str) -> List[str]:
+    """``javascript:`` values for *marker*, so a dialog can be attributed to them."""
+    return [
+        f"javascript:{mark_call(marker)}",
+        f"javascript:{mark_call(marker, 'tick')}",
+        f"JaVaScRiPt:{mark_call(marker)}",
+    ]
+
+
 def _set_param(url: str, param: str, value: str) -> str:
     p = urlparse(url)
     q = dict(parse_qsl(p.query, keep_blank_values=True))
@@ -48,6 +58,11 @@ async def scan_redirect_xss(
     log = log or (lambda *a, **k: None)
     findings: List[XSSFinding] = []
 
+    # One marker per run: every probe below names it, and the browser is asked
+    # to prove that marker rather than any dialog the page happens to raise.
+    marker = make_marker(hashlib.md5(f"{url}{time.time()}".encode()).hexdigest()[:8])
+    payloads = redirect_payloads(marker)
+
     # Params already in URL + common names
     existing = list(dict(parse_qsl(urlparse(url).query)).keys())
     params = list(dict.fromkeys(existing + REDIRECT_PARAMS))[:12]
@@ -64,7 +79,7 @@ async def scan_redirect_xss(
             continue
         log(f"    [redirect] candidate param={param}", "info")
 
-        for payload in PAYLOADS[:max_payloads]:
+        for payload in payloads[:max_payloads]:
             attack = _set_param(url, param, payload)
             st2, body2, hdrs2, fin2 = await client.request("GET", attack)
             loc2 = (hdrs2 or {}).get("Location") or (hdrs2 or {}).get("location") or ""
@@ -90,14 +105,14 @@ async def scan_redirect_xss(
             if browser and browser.available:
                 # Prefer final URL if body contains clickable js link; else attack URL
                 confirm_url = fin2 or attack
-                br = await browser.confirm(confirm_url, payload=payload)
+                br = await browser.confirm(confirm_url, payload=payload, marker=marker)
                 if br.confirmed:
                     finding.browser_confirmed = True
                     finding.confidence = 0.95
                     finding.evidence += f" | browser:{br.detail}"
                 elif in_body and payload in body2:
                     # Try synthetic page with the href (same host navigation of attack URL)
-                    br2 = await browser.confirm(attack, payload=payload)
+                    br2 = await browser.confirm(attack, payload=payload, marker=marker)
                     if br2.confirmed:
                         finding.browser_confirmed = True
                         finding.confidence = 0.95

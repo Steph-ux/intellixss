@@ -12,30 +12,57 @@ import aiohttp
 
 from intellixss.http.client import HttpClient
 from intellixss.models import InjectionContext, XSSFinding
+from intellixss.payloads.generator import make_marker, mark_call
 
-SVG_ONLOAD = b"""<?xml version="1.0" standalone="no"?>
-<svg xmlns="http://www.w3.org/2000/svg" onload="alert(1)">
-  <rect width="100" height="100"/>
-</svg>
-"""
-
-SVG_SCRIPT = b"""<svg xmlns="http://www.w3.org/2000/svg">
-  <script>alert(1)</script>
-</svg>
-"""
-
-HTML_IMG = b"""<!DOCTYPE html><html><body>
-<img src=x onerror="alert(1)">
-</body></html>
-"""
-
-UPLOAD_PAYLOADS: List[Tuple[str, str, str, bytes]] = [
-    ("xss.svg", "image/svg+xml", "svg_onload", SVG_ONLOAD),
-    ("xss.svg", "image/svg+xml", "svg_script", SVG_SCRIPT),
-    ("xss.html", "text/html", "html_img", HTML_IMG),
-    ("xss.svg.png", "image/png", "svg_as_png", SVG_ONLOAD),
-    ("xss.png", "image/svg+xml", "ctype_bypass", SVG_ONLOAD),
+# The file is the payload, so the marker has to be inside the bytes that are
+# uploaded. A body written before the marker exists is a body the browser can
+# never attribute: an ``alert(1)`` a page raises for its own reasons would then
+# confirm just as well.
+_FILE_TEMPLATES: List[Tuple[str, str, str, str]] = [
+    (
+        "xss.svg",
+        "image/svg+xml",
+        "svg_onload",
+        '<?xml version="1.0" standalone="no"?>\n'
+        '<svg xmlns="http://www.w3.org/2000/svg" onload="{CALL}">\n'
+        '  <rect width="100" height="100"/>\n'
+        '</svg>\n',
+    ),
+    (
+        "xss.svg",
+        "image/svg+xml",
+        "svg_script",
+        '<svg xmlns="http://www.w3.org/2000/svg">\n'
+        '  <script>{CALL}</script>\n'
+        '</svg>\n',
+    ),
+    (
+        "xss.html",
+        "text/html",
+        "html_img",
+        '<!DOCTYPE html><html><body>\n'
+        '<img src=x onerror="{CALL}">\n'
+        '</body></html>\n',
+    ),
+    ("xss.svg.png", "image/png", "svg_as_png", None),
+    ("xss.png", "image/svg+xml", "ctype_bypass", None),
 ]
+
+
+def upload_payloads(marker: str) -> List[Tuple[str, str, str, bytes]]:
+    """The upload set for *marker*: name, content type, kind, file bytes.
+
+    The two deceptive entries reuse the first template byte for byte, so the
+    marker reaches a server that sniffs the extension or trusts the declared
+    type exactly as it reaches one that does not.
+    """
+    call = mark_call(marker)
+    base = _FILE_TEMPLATES[0][3].format(CALL=call).encode()
+    out: List[Tuple[str, str, str, bytes]] = []
+    for name, ctype, kind, tpl in _FILE_TEMPLATES:
+        content = base if tpl is None else tpl.format(CALL=call).encode()
+        out.append((name, ctype, kind, content))
+    return out
 
 
 def discover_upload_forms(html: str, base_url: str) -> List[dict]:
@@ -90,10 +117,15 @@ async def scan_upload_xss(
 
     log(f"    [upload] trying {len(forms)} form/path(s)", "info")
 
+    # One marker per run: every file in the set names it, and the browser is
+    # asked to prove that marker specifically.
+    marker = make_marker(hashlib.md5(f"{base_url}{time.time()}".encode()).hexdigest()[:8])
+    upload_set = upload_payloads(marker)
+
     for form in forms[:6]:
         action = form["action"]
         field = form["file_field"]
-        for filename, ctype, kind, content in UPLOAD_PAYLOADS:
+        for filename, ctype, kind, content in upload_set:
             formdata = aiohttp.FormData()
             formdata.add_field(
                 field,
@@ -120,8 +152,9 @@ async def scan_upload_xss(
                 m = _URL_IN_RESP.search(body) or _ABS_URL.search(body)
                 if m:
                     file_url = urljoin(action, m.group(1) if m.lastindex else m.group(0))
-            # Some apps echo content
-            if not file_url and body and (b"alert(1)" in content and "alert(1)" in body):
+            # Some apps echo content. The echoed text is the file's own marker,
+            # not a literal every page is free to print.
+            if not file_url and body and (marker in body):
                 file_url = fin or action
 
             if not file_url:
@@ -138,7 +171,10 @@ async def scan_upload_xss(
                 confidence=0.7,
             )
             if browser and browser.available:
-                br = await browser.confirm(file_url, payload="alert(1)")
+                # The file on disk calls ``alert(marker)``. Handing the same
+                # marker to the browser makes the dialog it watches for
+                # exclusively ours.
+                br = await browser.confirm(file_url, payload=content.decode(errors="replace"), marker=marker)
                 if br.confirmed:
                     finding.browser_confirmed = True
                     finding.confidence = 0.95
@@ -149,8 +185,14 @@ async def scan_upload_xss(
                         "vuln",
                     )
                     return findings
-            # Without browser: only report if response clearly reflects executable SVG/HTML
-            if "onload=alert" in (body or "") or "<script>alert" in (body or ""):
+            # Without browser: only report if the response echoes this file's
+            # own executable markup, which is what a server serving the stored
+            # file back unmodified does.
+            if (
+                f'onload="{mark_call(marker)}"' in (body or "")
+                or f"<script>{mark_call(marker)}</script>" in (body or "")
+                or f'onerror="{mark_call(marker)}"' in (body or "")
+            ):
                 findings.append(finding)
                 log(f"    [VULN] upload XSS {kind} (reflection)", "vuln")
                 return findings

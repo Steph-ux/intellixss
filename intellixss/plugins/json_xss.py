@@ -11,19 +11,26 @@ from urllib.parse import urljoin, urlparse
 from intellixss.analysis.reflection import is_payload_effective
 from intellixss.http.client import HttpClient
 from intellixss.models import InjectionContext, XSSFinding
+from intellixss.payloads.generator import make_marker, mark_call
 
 _COMMON_FIELDS = [
     "query", "search", "q", "message", "comment", "body", "content",
     "text", "name", "title", "description", "input", "value", "data",
 ]
 
-_PAYLOADS = [
-    "<img src=x onerror=alert(1)>",
-    "<svg/onload=alert(1)>",
-    '"><img src=x onerror=alert(1)>',
-    "<details open ontoggle=alert(1)>",
-    "\\u003cimg src=x onerror=alert(1)\\u003e",
-]
+
+def json_payloads(marker: str) -> List[str]:
+    """Body values for *marker*, so the browser can attribute a dialog to them."""
+    a = mark_call(marker)
+    tick = mark_call(marker, "tick")
+    return [
+        f"<img src=x onerror={a}>",
+        f"<svg/onload={a}>",
+        f'"><img src=x onerror={a}>',
+        f"<details open ontoggle={a}>",
+        f"\\u003cimg src=x onerror={a}\\u003e",
+        f"<svg/onload={tick}>",
+    ]
 
 _FETCH_RE = [
     re.compile(r"""fetch\s*\(\s*['"`]([^'"`]+)['"`]""", re.I),
@@ -76,6 +83,11 @@ async def scan_json_xss(
     endpoints = discover_json_endpoints(base_url, html)[:max_endpoints]
     log(f"    [json] probing {len(endpoints)} endpoint(s)", "info")
 
+    # One marker per run: every payload below names it, and the browser is
+    # asked to prove that marker and no other.
+    marker = make_marker(hashlib.md5(f"{base_url}{time.time()}".encode()).hexdigest()[:8])
+    payloads = json_payloads(marker)
+
     for ep in endpoints:
         for field in _COMMON_FIELDS[:max_fields]:
             canary = f"jx{hashlib.md5(f'{ep}{field}{time.time()}'.encode()).hexdigest()[:8]}"
@@ -85,7 +97,7 @@ async def scan_json_xss(
             if canary not in body:
                 continue
             log(f"    [json] reflection {ep[:50]} field={field}", "info")
-            for payload in _PAYLOADS[:max_payloads]:
+            for payload in payloads[:max_payloads]:
                 st2, body2, hdrs2, fin2 = await client.inject_json(ep, field, payload)
                 if st2 == 0 or not body2:
                     continue
@@ -115,7 +127,7 @@ async def scan_json_xss(
                 # Browser confirm only if endpoint returns HTML
                 ctype = (hdrs2 or {}).get("Content-Type", "")
                 if browser and browser.available and "html" in ctype.lower():
-                    br = await browser.confirm(finding.url, payload=payload)
+                    br = await browser.confirm(finding.url, payload=payload, marker=marker)
                     if br.confirmed:
                         finding.browser_confirmed = True
                         finding.confidence = 0.95

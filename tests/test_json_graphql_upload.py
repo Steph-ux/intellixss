@@ -1,6 +1,8 @@
-from intellixss.plugins.json_xss import discover_json_endpoints, _PAYLOADS
-from intellixss.plugins.graphql_xss import _gql_urls, _PAYLOADS as GQL_P
-from intellixss.plugins.upload_xss import discover_upload_forms, UPLOAD_PAYLOADS
+from intellixss.plugins.graphql_xss import _gql_urls, gql_payloads
+from intellixss.plugins.json_xss import discover_json_endpoints, json_payloads
+from intellixss.plugins.upload_xss import discover_upload_forms, upload_payloads
+
+MARKER = "ixm0a1b2c3d"
 
 
 def test_discover_json_from_html():
@@ -15,14 +17,17 @@ def test_discover_json_from_html():
     assert any("search" in e for e in eps)
 
 
-def test_json_payloads_have_alert():
-    assert any("alert" in p for p in _PAYLOADS)
+def test_json_payloads_carry_the_marker():
+    payloads = json_payloads(MARKER)
+    assert payloads
+    assert all(MARKER in p for p in payloads)
+    assert not any("alert(1)" in p for p in payloads)
 
 
 def test_gql_urls():
     urls = _gql_urls("https://ex.com/home")
     assert any(u.endswith("/graphql") for u in urls)
-    assert any("alert" in p for p in GQL_P)
+    assert all(MARKER in p for p in gql_payloads(MARKER))
 
 
 def test_upload_form_discovery():
@@ -39,4 +44,6 @@ def test_upload_form_discovery():
 
 
 def test_upload_payloads_nonempty():
-    assert len(UPLOAD_PAYLOADS) >= 3
+    payloads = upload_payloads(MARKER)
+    assert len(payloads) >= 3
+    assert all(MARKER.encode() in content for *_rest, content in payloads)

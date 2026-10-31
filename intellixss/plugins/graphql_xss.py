@@ -12,6 +12,7 @@ from urllib.parse import urljoin, urlparse
 from intellixss.analysis.reflection import is_payload_effective
 from intellixss.http.client import HttpClient
 from intellixss.models import InjectionContext, XSSFinding
+from intellixss.payloads.generator import make_marker, mark_call
 
 _GQL_PATHS = [
     "/graphql", "/api/graphql", "/v1/graphql", "/gql", "/query", "/graph",
@@ -26,12 +27,16 @@ _COMMON_MUTATIONS = [
     ("contactSupport", "message", {"message": "X", "subject": "s"}),
 ]
 
-_PAYLOADS = [
-    "<img src=x onerror=alert(1)>",
-    "<svg/onload=alert(1)>",
-    '"><img src=x onerror=alert(1)>',
-    "<details open ontoggle=alert(1)>",
-]
+
+def gql_payloads(marker: str) -> List[str]:
+    """Mutation values for *marker*, so a dialog can be attributed to them."""
+    a = mark_call(marker)
+    return [
+        f"<img src=x onerror={a}>",
+        f"<svg/onload={a}>",
+        f'"><img src=x onerror={a}>',
+        f"<details open ontoggle={a}>",
+    ]
 
 
 def _gql_urls(base: str) -> List[str]:
@@ -79,12 +84,14 @@ async def scan_graphql_xss(
 
     # operationName reflection in HTML errors
     canary = f"gn{hashlib.md5(str(time.time()).encode()).hexdigest()[:8]}"
-    evil_name = f"{canary}<img src=x onerror=alert(1)>"
+    marker = make_marker(hashlib.md5(f"{base_url}{time.time()}".encode()).hexdigest()[:8])
+    evil_payload = f"<img src=x onerror={mark_call(marker)}>"
+    evil_name = f"{canary}{evil_payload}"
     st, body, hdrs, fin = await _post_gql(
         client, endpoint, "query X { __typename }", operation_name=evil_name
     )
     if st and body and canary in body:
-        ok, tag = is_payload_effective(body, "<img src=x onerror=alert(1)>", "html_text")
+        ok, tag = is_payload_effective(body, evil_payload, "html_text")
         if ok or "<img" in body:
             findings.append(
                 XSSFinding(
@@ -92,7 +99,7 @@ async def scan_graphql_xss(
                     parameter="operationName",
                     method="POST",
                     context=InjectionContext.HTML_TEXT,
-                    payload="<img src=x onerror=alert(1)>",
+                    payload=evil_payload,
                     evidence=f"graphql_operationName_reflection:{tag if ok else 'raw'}",
                     vulnerability_type="graphql_reflected",
                     confidence=0.75,
@@ -100,9 +107,11 @@ async def scan_graphql_xss(
             )
             log("    [VULN] GraphQL operationName reflection", "vuln")
 
+    payloads = gql_payloads(marker)
+
     # Common mutations with XSS in string fields
     for mut, field, base_vars in _COMMON_MUTATIONS:
-        for payload in _PAYLOADS[:max_payloads]:
+        for payload in payloads[:max_payloads]:
             vars_ = dict(base_vars)
             vars_[field] = payload
             # Build simple mutation
@@ -142,7 +151,7 @@ async def scan_graphql_xss(
                 confidence=0.8,
             )
             if browser and browser.available and stored:
-                br = await browser.confirm(finding.url, payload=payload)
+                br = await browser.confirm(finding.url, payload=payload, marker=marker)
                 if br.confirmed:
                     finding.browser_confirmed = True
                     finding.confidence = 0.95

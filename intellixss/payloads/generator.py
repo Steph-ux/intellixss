@@ -15,6 +15,22 @@ def make_marker(uid: str) -> str:
     return f"ixm{uid.lower()}"
 
 
+def mark_call(marker: str, style: str = "single") -> str:
+    """The executing call for *marker*.
+
+    Every payload an engine probe sends names the marker in the call it makes,
+    so the dialog the browser sees can only be the one this payload raised.
+    *style* picks the quoting for the sink: a handler already sitting inside a
+    quoted attribute needs backticks, a JavaScript string needs the quote the
+    surrounding literal does not use.
+    """
+    if style == "tick":
+        return f"alert(`{marker}`)"
+    if style == "double":
+        return f'alert("{marker}")'
+    return f"alert('{marker}')"
+
+
 def _mark(marker: str) -> str:
     """PoP binder: calls alert with the marker (survives naive alert(1) filters)."""
     return f"alert('{marker}')"
