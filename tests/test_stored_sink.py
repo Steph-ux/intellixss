@@ -37,17 +37,22 @@ class FakeClient:
         self.value = value
         return 200, "<html>ok</html>", {}, url
 
+    async def inject_json(self, url, param, value, base=None, method="POST"):
+        return await self.inject(url, param, value, method=method, base_data=base)
+
     async def request(self, method, url, **_kw):
         # The form lives on the page that carries it; the handler is a bare
         # endpoint and answers with nothing a browser could execute. The page
-        # renders whatever the last submission stored.
-        if url.startswith("https://t.test/post?"):
+        # renders whatever the last submission stored, and keeps rendering it
+        # when the query is dropped: the value is a record, not a parameter.
+        if url.startswith("https://t.test/post") and "confirmation" not in url:
             if self.value:
                 return 200, self.render_body.replace("{V}", self.value), {}, url
             return 200, self.form_html, {}, url
-        if "confirmation" in url:
-            return 200, "<html><body>Comment submitted</body></html>", {}, url
-        return 200, "<html>ok</html>", {}, url
+        # Every other path is the handler endpoint itself: it answered the
+        # write and keeps no record, so a read of it proves nothing about
+        # storage.
+        return 200, "<html><body>ok</body></html>", {}, url
 
 
 PAGE = "<html><body><a id=author href=\"{V}\">n</a></body></html>"
