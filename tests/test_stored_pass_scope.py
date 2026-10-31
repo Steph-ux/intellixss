@@ -41,7 +41,10 @@ def test_put_target_is_scanned_after_a_post_form_already_stored():
         )
         return []
 
-    scanner = orchestrator.Scanner(Config())
+    # Writing is what this test is about, so the scan is asked for it
+    # explicitly. Read-only is the default and drops these targets on purpose,
+    # which is covered below.
+    scanner = orchestrator.Scanner(Config(writes=True))
     scanner._mute = True
     result = ScanResult(target_url="https://t.test/")
     result.findings.append(_stored_finding("https://t.test/api/Complaints", "message"))
@@ -90,7 +93,7 @@ def test_full_stored_pass_runs_when_nothing_was_stored_yet():
         calls.append((browser, page_stages, len(targets or [])))
         return []
 
-    scanner = orchestrator.Scanner(Config())
+    scanner = orchestrator.Scanner(Config(writes=True))
     scanner._mute = True
     result = ScanResult(target_url="https://t.test/")
     targets = [
@@ -110,3 +113,39 @@ def test_full_stored_pass_runs_when_nothing_was_stored_yet():
         orchestrator.scan_stored_auto = saved
 
     assert calls == [(scanner.browser, True, 2)]
+
+
+def test_a_read_only_scan_never_hands_a_write_target_to_the_pass():
+    """The default scan drives the page, not the API that stores the record."""
+    calls = []
+
+    async def fake_auto(client, seed, *, browser=None, targets=None, log=None, page_stages=True):
+        calls.append(
+            (page_stages, [(t.method, t.url) for t in targets or []])
+        )
+        return []
+
+    scanner = orchestrator.Scanner(Config())  # read-only
+    scanner._mute = True
+    result = ScanResult(target_url="https://t.test/")
+    targets = [
+        ScanTarget(url="https://t.test/api/Complaints", method="POST", params=["message"]),
+        ScanTarget(url="https://t.test/rest/products/1/reviews", method="PUT", params=["message"]),
+        ScanTarget(url="https://t.test/search", method="GET", params=["q"]),
+    ]
+
+    saved = orchestrator.scan_stored_auto
+    orchestrator.scan_stored_auto = fake_auto
+    try:
+        asyncio.run(
+            scanner._stored_pass(
+                SimpleNamespace(), "https://t.test/", targets, result, asyncio.Lock()
+            )
+        )
+    finally:
+        orchestrator.scan_stored_auto = saved
+
+    assert calls, "the page stages must still run on a read-only scan"
+    page_stages, urls = calls[0]
+    assert page_stages is True
+    assert urls == [("GET", "https://t.test/search")]

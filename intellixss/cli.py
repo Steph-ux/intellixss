@@ -137,6 +137,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="Also run header, redirect, JSON, GraphQL and upload plugins",
     )
     scan.add_argument(
+        "--write",
+        dest="writes",
+        action="store_true",
+        help=(
+            "Allow POST/PUT/PATCH/DELETE payloads (stored, upload, JSON and "
+            "GraphQL sinks). Off by default: a scan only reads the target"
+        ),
+    )
+    scan.add_argument(
         "--max-confirm",
         type=int,
         default=12,
@@ -553,6 +562,7 @@ async def async_main(argv: Optional[List[str]] = None) -> int:
         html_report=args.html,
         use_browser=args.use_browser,
         deep=args.deep,
+        writes=getattr(args, "writes", False),
         auth=auth,
         retries=args.retries,
         adaptive_throttle=args.adaptive,

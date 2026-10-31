@@ -52,7 +52,12 @@ from intellixss.analysis.static_dom import (
 from intellixss.auth import build_auth_cookies, build_auth_headers, form_login
 from intellixss.config import Config
 from intellixss.discovery.targets import discover_targets, fetch_page_scripts
-from intellixss.http.client import HttpClient, set_hash_query_param
+from intellixss.http.client import (
+    HttpClient,
+    _UNSAFE_METHODS as UNSAFE_METHODS,
+    set_hash_query_param,
+    writes_allowed,
+)
 from intellixss.models import (
     BlockDiagnosis,
     BlockReason,
@@ -149,6 +154,20 @@ _CLIENT_ROUTE_RESERVE = 4
 # bounds the guess.
 _ROUTE_ATTEMPT_ALLOWANCE = 1
 
+
+
+async def guarded_send(client, config: Config, method: str, url: str, body) -> bool:
+    """Send one request if the scan may, and report whether it was sent.
+
+    This is the caller-visible companion to the client's own gate, for code
+    that wants to know *why* nothing was written. The client still refuses an
+    unsafe method on a read-only scan even if a caller forgets this, so the
+    guarantee does not depend on every call site being correct.
+    """
+    if method.upper() in UNSAFE_METHODS and not writes_allowed(config):
+        return False
+    await client.request(method, url, data=body)
+    return True
 
 
 def _probe_reserve(browser, url: str) -> int:
@@ -477,6 +496,19 @@ class Scanner:
         # no page to submit, so it is reachable from here alone. Returning as
         # soon as one stored finding existed therefore let a single form sink
         # hide every API sink on the site.
+        #
+        # A read-only scan keeps the two browser stages, which drive the page
+        # itself and write nothing to the server, and drops every request-based
+        # write target. The HTTP client would refuse those anyway; dropping them
+        # here is what keeps the pass from spending its wall clock on requests
+        # that cannot be sent.
+        writes = writes_allowed(self.config)
+        if not writes:
+            targets = [
+                t
+                for t in targets
+                if str(getattr(t, "method", "GET")).upper() not in UNSAFE_METHODS
+            ]
         stored_already = any(
             f.vulnerability_type.startswith("stored") for f in result.findings
         )
@@ -486,13 +518,14 @@ class Scanner:
                 for t in targets
                 if str(getattr(t, "method", "GET")).upper() not in ("GET", "HEAD", "OPTIONS", "POST")
             ]
-            if not targets:
+            if not targets and not writes:
                 return
         try:
             self._log(
                 "stored XSS pass (API write targets)"
                 if stored_already
-                else "stored XSS pass (server + client-side forms)",
+                else "stored XSS pass (server + client-side forms)"
+                + ("" if writes else " [read-only: page stages only]"),
                 "info",
             )
             # The stored pass is a side quest. The browser-driven stages carry

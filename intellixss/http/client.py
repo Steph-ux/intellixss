@@ -18,6 +18,21 @@ _TRANSIENT = {429, 502, 503, 504}
 # Statuses that signal "slow down"
 _BACKOFF = {429, 503}
 
+# Methods that change state on the target. A read-only scan sends none of them.
+# PUT and PATCH are included because the API sinks the scanner probes are
+# written with them, and DELETE because a cleanup phase must not be the only
+# code that knows the list.
+_UNSAFE_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
+
+
+def writes_allowed(config: Config) -> bool:
+    """Whether this scan may change state on the target.
+
+    One predicate, used by the client before every request, so the answer
+    cannot drift between the plugins that write.
+    """
+    return bool(getattr(config, "writes", False))
+
 
 class HttpClient:
     def __init__(
@@ -44,6 +59,10 @@ class HttpClient:
         self.requests = 0
         self.rate_limited = 0
         self.retries = 0
+        # Writes the read-only gate refused. A scan that reports zero findings
+        # can be distinguished from a scan that was silently prevented from
+        # probing the write paths at all.
+        self.writes_refused = 0
 
     async def __aenter__(self) -> "HttpClient":
         if self._session is None:
@@ -98,8 +117,19 @@ class HttpClient:
         """
         Returns (status, body, headers, final_url).
         On network error returns (0, "", {}, url). Retries transient failures.
+
+        A state-changing method is refused outright unless the scan was asked
+        for writes. The gate sits here, in the one place every request passes
+        through, because a plugin that forgot to check a flag is exactly how the
+        scanner came to post records on scans nobody asked to be destructive.
+        The refusal is reported as (0, "", {}, url) — the same shape as a
+        network error — so a caller that does not check cannot mistake it for a
+        successful write and report a stored finding from it.
         """
         assert self._session is not None
+        if method.upper() in _UNSAFE_METHODS and not writes_allowed(self.config):
+            self.writes_refused += 1
+            return (0, "", {}, url)
         attempts = max(0, int(self.config.retries)) + 1
         last = (0, "", {}, url)
         for attempt in range(attempts):

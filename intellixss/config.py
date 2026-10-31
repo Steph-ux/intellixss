@@ -46,6 +46,12 @@ class Config:
     workers: int = 4
     deep: bool = False  # header + redirect + json + graphql + upload
     aggressive: bool = False
+    # A scan is read-only unless it is explicitly told otherwise. The stored,
+    # upload, JSON and GraphQL plugins post records to the target, and a scan
+    # run to look for reflected XSS left reviews and uploads behind. The gate is
+    # enforced in the HTTP client, so a plugin that forgets to check cannot
+    # bypass it.
+    writes: bool = False
     # Probe a short list of conventional parameter names on the seed path.
     # A lab (and more than a few real apps) reflects a parameter it never links
     # to or puts in a form; the only way a tester finds it is by trying the name.
