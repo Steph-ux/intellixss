@@ -165,9 +165,10 @@ SURFACES = [
         "endpoint": "/rest/products/1/reviews",
         "field": "message",
         "method": "PUT",
-        "note": "`PUT /rest/products/1/reviews` stores `message` verbatim, with no "
-        "authentication; the Angular template writes it into the product dialog, "
-        "which 20.3.0 opens from the `#/search` grid rather than a route of its own.",
+        "auth": True,
+        "note": "`PUT /rest/products/1/reviews` stores `message` verbatim behind a "
+        "session; the Angular template writes it into the product dialog, which "
+        "20.3.0 opens from the `#/search` grid rather than a route of its own.",
     },
     {
         "key": "feedback",
