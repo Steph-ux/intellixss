@@ -288,6 +288,7 @@ async def scan_server_stored(
     log=None,
     json_body: bool = False,
     on_write=None,
+    record=None,
 ) -> List[XSSFinding]:
     """
     Classic stored XSS:
@@ -295,11 +296,17 @@ async def scan_server_stored(
       1. inject a canary into the form field (POST/GET)
       2. re-fetch render URL(s) — does it persist?
       3. inject payloads and check for executable reflection + browser confirm
+
+    *record*, when given, is the caller's live body: it is read for the fields
+    already known and written back with the ones this pass filled, so a caller
+    that tests several fields of one form does not lose what the first write
+    learned. Without it the pass works on a copy of *base_data*.
     """
     log = log or (lambda *a, **k: None)
     findings: List[XSSFinding] = []
     render_urls = render_urls or [form_url]
-    data = dict(base_data or {})
+    data = record if record is not None else dict(base_data or {})
+    saved: dict = {}
     uid = hashlib.md5(f"{field}{time.time()}".encode()).hexdigest()[:8]
 
     # A record whose other fields went out empty is refused by the handler and
@@ -334,6 +341,10 @@ async def scan_server_stored(
         if not form_html:
             form_html = html
     data = _fill_untargeted_fields(data, _form_field_names(form_html), field)
+    # The field's value is put back when the pass ends. A caller that tests the
+    # next field of the same form must not send the previous test's payload,
+    # which the handler would store as the other field's value.
+    saved[field] = data.get(field)
     wrap = URL_SHAPE if wants_url(field_html) else ""
 
     # A field that only accepts a link is still tested with the record inside
@@ -358,7 +369,61 @@ async def scan_server_stored(
     # 1) Canary — does storage persist?
     canary = f"ixc{uid}"
     data[field] = canary
-    st, body, hdrs, fin = await _send(canary)
+    try:
+        return await _stored_run(
+            client,
+            form_url,
+            field=field,
+            method=method,
+            data=data,
+            send=_send,
+            canary=canary,
+            uid=uid,
+            render_urls=render_urls,
+            browser=browser,
+            max_payloads=max_payloads,
+            log=log,
+            on_write=on_write,
+            form_html=form_html,
+            json_body=json_body,
+            page_scripts=None,
+        )
+    finally:
+        if saved[field] is None:
+            data.pop(field, None)
+        else:
+            data[field] = saved[field]
+
+
+async def _stored_run(
+    client,
+    form_url: str,
+    *,
+    field: str,
+    method: str,
+    data: dict,
+    send,
+    canary: str,
+    uid: str,
+    render_urls: List[str],
+    browser,
+    max_payloads: int,
+    log,
+    on_write,
+    form_html: str,
+    json_body: bool,
+    page_scripts,
+) -> List[XSSFinding]:
+    """The write-read-confirm loop of :func:`scan_server_stored`.
+
+    *render_urls* already tells a handler that answered with a *confirmation*
+    page apart from the page that renders the record: the caller decides which
+    candidate list is worth reading. *page_scripts*, when given, receives the
+    scripts of the page that names the record's endpoints, so a caller testing a
+    second field does not re-analyse the same bundle.
+    """
+    findings: List[XSSFinding] = []
+    st, body, hdrs, fin = await send(canary)
     if st == 0:
         return findings
     if st >= 400 and (method.upper() == "POST" or json_body):
@@ -375,7 +440,7 @@ async def scan_server_stored(
     stored = False
     render_body = ""
     render_candidates = list(render_urls)
-    page_scripts: List[str] = []
+    page_scripts: List[str] = page_scripts if page_scripts is not None else []
     render_page = render_urls[0] if render_urls else form_url
     # The endpoint list has to come from the *page* that posts the form, not
     # from the handler it posts to: the handler is a bare endpoint and the
@@ -480,7 +545,22 @@ async def scan_server_stored(
         "debug",
     )
 
+    # A field the page strips of markup keeps the canary and drops every
+    # element, so the probe proves storage and nothing beyond it. That is only
+    # known by measuring: one write whose distinguishing feature is a tag, read
+    # back. An unread page, a refused write or a page holding no value answers
+    # nothing and leaves the claim where it was.
+    executable = await _markup_reaches_the_page(
+        client, form_url, field=field, method=method, send=send, data=data, log=log
+    )
+    if not executable:
+        log(f"stored: markup stripped before the page field={field}", "debug")
+
     marker = make_marker(uid)
+    # The record is reported by a value that carries nothing executable — the
+    # page's own proof token — so what it shows about storage does not depend on
+    # a payload the page may have transcribed.
+    record_marker = f"ixr{uid}"
     page_js = "\n".join(page_scripts) or page_body_for_endpoints or body or ""
     payloads: List[str] = []
     for sk in sinks or [sink or InjectionContext.HTML_TEXT]:
@@ -488,10 +568,23 @@ async def scan_server_stored(
             if p not in payloads:
                 payloads.append(p)
     payloads = payloads[:max(max_payloads, 4) * max(1, len(sinks))]
+    # A page that strips markup gets one more write and read, of a value that
+    # cannot execute. What it shows is the record, and what it shows about the
+    # record is the only thing that can be claimed for it.
+    if not executable:
+        data[field] = record_marker
+        st_m, body_m, _hm, _fm = await send(record_marker)
+        if st_m and st_m < 400:
+            for ru in render_urls:
+                _st, body_r, _h = await _render_one(client, ru)
+                if _record_reaches_the_page(body_r, record_marker):
+                    marker = record_marker
+                    render_body = body_r
+                    break
     stored_proof = ""
     for payload in payloads:
         data[field] = payload
-        st2, body2, _, fin2 = await _send(payload)
+        st2, body2, _, fin2 = await send(payload)
         if st2 == 0:
             continue
         for ru in render_urls:
@@ -519,45 +612,82 @@ async def scan_server_stored(
             # payload's own text, not about where the page puts it.
             if scanned is not body_r and _opens_a_complete_element(payload):
                 ctx_kind = InjectionContext.HTML_TEXT
-            out = evaluate_response(
-                url=ru,
-                param=field,
-                method=method,
-                payload=payload,
-                status=st_r,
-                body=scanned,
-                headers=hdrs_r,
-                context=ctx_kind,
-            )
+            # What the page parsed is what decides whether this is executable.
+            # A value inside a quoted attribute is its own text: no payload in
+            # it opens an element, whatever the echo predicate makes of the
+            # ``onerror`` the payload carries. A page that strips markup before
+            # it renders stores the record and executes nothing in it either —
+            # the value is worth reporting, the script in it is not.
             finding: Optional[XSSFinding] = None
-            if out.success and out.finding:
-                finding = out.finding
-                finding.vulnerability_type = "stored"
-                finding.method = method
-            else:
-                # The payload was built for one of the contexts the canary was
-                # rendered into; that is the context it has to be judged in. The
-                # first echo on the page may be a different one (an ``href``
-                # ahead of the ``onclick``), and judging a handler breakout by
-                # the URL predicate rejects the only payload that can run.
-                ok, tag = False, ""
-                for sk in sinks or [ctx_kind]:
-                    ok, tag = is_payload_effective(scanned, payload, sk.value)
-                    if ok:
-                        ctx_kind = sk
-                        break
-                if not ok:
+            refuted = not executable or ctx_kind in _TEXT_ONLY_CONTEXTS
+            if not refuted:
+                out = evaluate_response(
+                    url=ru,
+                    param=field,
+                    method=method,
+                    payload=payload,
+                    status=st_r,
+                    body=scanned,
+                    headers=hdrs_r,
+                    context=ctx_kind,
+                )
+                if out.success and out.finding:
+                    finding = out.finding
+                    finding.vulnerability_type = "stored"
+                    finding.method = method
+                else:
+                    # The payload was built for one of the contexts the canary
+                    # was rendered into; that is the context it has to be judged
+                    # in. The first echo on the page may be a different one (an
+                    # ``href`` ahead of the ``onclick``), and judging a handler
+                    # breakout by the URL predicate rejects the only payload
+                    # that can run.
+                    ok, tag = False, ""
+                    for sk in sinks or [ctx_kind]:
+                        ok, tag = is_payload_effective(scanned, payload, sk.value)
+                        if ok:
+                            ctx_kind = sk
+                            break
+                    if not ok:
+                        continue
+                    finding = XSSFinding(
+                        url=ru,
+                        parameter=field,
+                        method=method,
+                        context=ctx_kind,
+                        payload=payload,
+                        evidence=f"server_stored:{tag}",
+                        vulnerability_type="stored",
+                        confidence=0.85,
+                    )
+            if finding is None:
+                # The page keeps this value and nothing in it runs: it is
+                # reported as what it is, a stored record that reflects back,
+                # and the confirmer is never spent on it.
+                if not _record_reaches_the_page(render_body, marker):
                     continue
+                # A page that strips markup answers no question about *this*
+                # payload: the record is proven by a value that carries none, so
+                # what is shown is the page's own proof, not a script it is
+                # claimed to render.
+                shown = record_marker if not executable else payload
                 finding = XSSFinding(
                     url=ru,
                     parameter=field,
                     method=method,
                     context=ctx_kind,
-                    payload=payload,
-                    evidence=f"server_stored:{tag}",
-                    vulnerability_type="stored",
+                    payload=shown,
+                    evidence="server_stored:not_executable",
+                    vulnerability_type="reflection",
                     confidence=0.85,
                 )
+                finding.marker = marker
+                finding.verified_by = "reflection"
+                findings.append(finding)
+                log(f"stored: record reflected, not executable field={field}", "info")
+                # One record per field: the remaining payloads would write the
+                # same record again and be reported as the same reflection.
+                return findings
             finding.marker = marker
             # Storage is proven by writing a value that executes nothing and
             # reading it back with no payload in the request. It is proven once
@@ -708,6 +838,95 @@ async def _prove_persistence(
             data.pop(field, None)
         else:
             data[field] = saved
+
+
+# A stored value placed by the page in these is text, not markup: no payload in
+# it opens an element. The page chooses where the record goes, so this is read
+# from the parse, not from where the canary happened to land in the page source.
+_TEXT_ONLY_CONTEXTS = frozenset(
+    {
+        InjectionContext.HTML_ATTR_DOUBLE,
+        InjectionContext.HTML_ATTR_SINGLE,
+        InjectionContext.TEXTAREA,
+        InjectionContext.TITLE,
+        InjectionContext.HTML_COMMENT,
+    }
+)
+
+
+async def _markup_reaches_the_page(
+    client: HttpClient,
+    url: str,
+    *,
+    field: str,
+    method: str,
+    send,
+    data: dict,
+    log,
+) -> bool:
+    """Whether a tag written into *field* is still a tag on the page.
+
+    The canary proves the value is stored; it says nothing about what the page
+    does with a value that carries markup. A handler that strips tags with its
+    own regular expression keeps the text and destroys every element, and the
+    probe then makes a sink look live when nothing in it can run.
+
+    The probe is one write, read once. ``True`` keeps the claim: a tag was found
+    in the page. ``False`` is the measured answer — the page returned no tag at
+    all, or returned this value as text. A read that failed, or a page that
+    answers its read with no stored value, says nothing and keeps the claim too.
+    """
+    marker = f"ixp{hashlib.md5(f'{field}{time.time()}{url}'.encode()).hexdigest()[:8]}"
+    tag = f"<b>ixp</b>{marker}"
+    saved = data.get(field)
+    try:
+        data[field] = tag
+        st, _body, _h, _f = await send(tag)
+        if not st or st >= 400:
+            log(f"stored: markup probe refused status={st} field={field}", "debug")
+            return True
+        status, page, _h = await _render_one(client, url)
+        # A page that keeps the tag *and* this value has it whole. The bare tag
+        # also appears in the page's own markup, so the value is what is looked
+        # for after it: ``<b>ixp</b>`` followed by the marker, nothing between.
+        kept = bool(
+            re.search(
+                r"<(?:b|strong|i|em)\b[^<>]*>\s*ixp\s*</(?:b|strong|i|em)>\s*"
+                + re.escape(marker),
+                page or "",
+                re.I,
+            )
+        )
+        log(
+            f"stored: markup probe field={field} status={status} "
+            f"value_on_page={marker in (page or '')} tag_kept={kept}",
+            "debug",
+        )
+        return kept
+    finally:
+        if saved is None:
+            data.pop(field, None)
+        else:
+            data[field] = saved
+
+
+def _record_reaches_the_page(body: str, marker: str) -> bool:
+    """Whether *marker* is in the page outside a quoted attribute's value.
+
+    A reader seeing "reflected" is told the record is there. The page quoting it
+    is where it is, so the marker is looked for anywhere markup is parsed as
+    markup: text, an unquoted attribute, a URL field.
+    """
+    if not marker or marker not in (body or ""):
+        return False
+    return bool(
+        re.search(
+            r">[^<]*" + re.escape(marker)
+            + r"|=\s*" + re.escape(marker)
+            + r"|=\s*['\"][^'\"]*" + re.escape(marker),
+            body,
+        )
+    )
 
 
 async def _render(client: HttpClient, urls: List[str]):
