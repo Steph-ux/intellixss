@@ -437,6 +437,17 @@ class BrowserConfirmer:
         if not self.available or not self._browser:
             return BrowserConfirmResult(False, "browser_unavailable")
 
+        # A confirmation is causal or it is nothing. The probe is credited when
+        # a dialog carries the marker this payload injected; without a marker
+        # any dialog the page happens to raise would pass for execution. That
+        # used to be accepted as "evidence-free" at the cost of confidence,
+        # which made ``alert(1)`` a complete proof and let five of the six
+        # plugins ship without one. It is now a caller defect, refused here so
+        # that no navigation is spent on a probe that could not prove
+        # anything even if it fired.
+        if not (marker or _extract_marker(payload)):
+            return BrowserConfirmResult(False, "confirm_without_marker")
+
         timeout_ms = timeout_ms or self.config.browser_timeout_ms
         budget = timeout_ms / 1000.0 + _SETTLE_SECONDS + _CLOSE_SECONDS * 3
         try:
