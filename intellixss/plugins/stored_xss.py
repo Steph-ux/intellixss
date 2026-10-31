@@ -1021,10 +1021,36 @@ _TEXT_ONLY_CONTEXTS = frozenset(
     }
 )
 
-# Elements whose payload-bearing attribute the browser reads as markup: an
+# The attributes whose value the browser reads as markup or as code: an
 # unquoted attribute value cannot carry one of these. A value in any *other*
 # attribute is text, and a page that keeps it there kept nothing executable.
-_MARKUP_ATTRIBUTES = frozenset({"src", "srcdoc", "href", "xlink:href", "style", "data"})
+#
+# The name alone is not enough for ``src``: the same attribute is a document
+# for ``iframe`` and a URL for the elements below. A browser fetches what an
+# ``img`` names in ``src`` and parses nothing, so a record confined to a profile
+# picture's URL is text as far as execution is concerned.
+_MARKUP_ATTRIBUTES = frozenset({"href", "xlink:href", "data"})
+_NON_MARKUP_SRC_TAGS = frozenset(
+    {"img", "script", "iframe", "input", "audio", "video", "source", "track", "embed"}
+)
+
+
+def _read_as_markup(tag, name: str) -> bool:
+    """Whether the browser parses *tag*'s attribute *name* as markup.
+
+    ``srcdoc`` and ``style`` are markup wherever they appear. ``href``,
+    ``data`` and ``xlink:href`` are read as URLs and count as markup only
+    outside the elements that treat them as an address. ``src`` follows the
+    element: a document for ``frame``, ``iframe`` and ``object``, a URL for
+    everything else that carries one.
+    """
+    name = name.lower()
+    tag_name = getattr(tag, "name", "").lower()
+    if name == "srcdoc" or name == "style":
+        return True
+    if name == "src":
+        return tag_name not in _NON_MARKUP_SRC_TAGS
+    return name in _MARKUP_ATTRIBUTES
 
 
 async def _markup_reaches_the_page(
@@ -1055,8 +1081,12 @@ async def _markup_reaches_the_page(
     """
     if not marker:
         marker = f"ixp{hashlib.md5(f'{field}{time.time()}{url}'.encode()).hexdigest()[:8]}"
-    record_text = f"ixp{hashlib.md5(marker.encode()).hexdigest()[:6]}"
-    tag = f"<b>{record_text}</b>{marker}"
+    record_text = _probe_word(marker)
+    # The record names its own word. A later probe writes a second record to
+    # the same page, and the first one is still there: matching whichever word
+    # comes first answers about the wrong record. ``bgt`` is not a hex digit,
+    # so the word this probe wrote is the only one the shape can find.
+    tag = f"<b>{record_text}</b>{marker}w{record_text[3:]}"
     saved = data.get(field)
     try:
         data[field] = tag
@@ -1098,6 +1128,74 @@ async def _markup_reaches_the_page(
 # the probe asked was whether markup reached the parser at all.
 _ELEMENT_HOLDING_THE_PROBE = "ixp"
 
+def _probe_word(marker: str) -> str:
+    """The text the probe places inside its element, derived from *marker*.
+
+    The word is lowercase hex so it can be found by shape: the application may
+    escape parts of the value on the way out, and the word has to survive that
+    to be recognised. What was written is therefore not what is searched for.
+    """
+    return f"ixp{hashlib.md5(marker.encode()).hexdigest()[:5]}"
+
+
+def _letters(text: str) -> str:
+    """*text* without the escapes an application inserted on the way out.
+
+    A page that escapes the record writes a backslash before characters it
+    considers special, and not always before the same ones: the Juice Shop
+    profile answers ``i\\xp…`` for ``ixp…``, and ``\\xpc…`` for a record it
+    rewrote. Both sides of every comparison are read with the escapes removed,
+    so the record is compared with itself rather than with its rendering.
+    """
+    return (text or "").replace("\\", "")
+
+
+def _probe_words_in(text: str) -> List[str]:
+    """Every probe-shaped word in *text*, read with its escapes removed."""
+    return re.findall(r"ixp[0-9a-f]{5,6}", _letters(text))
+
+
+def _probe_word_in(page: str) -> str:
+    """The first probe word the page shows, or ``""`` when there is none."""
+    words = _probe_words_in(page)
+    return words[0] if words else ""
+
+
+def _word_reaches_the_page(page: str, marker: str) -> bool:
+    """Whether the page carries this probe's record, however it escaped it.
+
+    The word is what tells a page that never received the record (a login
+    redirect, an empty listing) from one that received it and stripped it. The
+    marker's own trail is searched for beside the word, so a page that shows
+    another field's record does not answer for this one.
+    """
+    return bool(_word_near(page, marker))
+
+
+def _word_near(page: str, marker: str, written: str = "") -> str:
+    """The probe's word that belongs to *marker*, or ``""`` when there is none.
+
+    A page carries a record for every field that was probed, and every probe
+    writes a word of the same shape, so whichever comes first on the page is
+    probably not the one being asked about. The record names its own word: the
+    marker, then ``w`` and this word's digits. That trail is what identifies it,
+    and it is looked for with the escapes removed, because a page may escape
+    either half of it. *written* is the word the caller put in the record.
+    """
+    if not page or not marker:
+        return ""
+    written = _letters(written)
+    if written.startswith("ixp"):
+        if re.search(
+            re.escape(marker) + r"w" + re.escape(written[3:]), _letters(page)
+        ):
+            return written
+        return ""
+    for word in _probe_words_in(page):
+        if re.search(re.escape(marker) + r"w" + re.escape(word[3:]), _letters(page)):
+            return word
+    return ""
+
 
 def _judged(page: str, marker: str) -> bool:
     """Whether *page* carries the value at all.
@@ -1105,9 +1203,10 @@ def _judged(page: str, marker: str) -> bool:
     A page that answers its read with no stored value — a login redirect, an
     empty listing — says nothing about what the page does with markup. Only a
     page that shows the value can be read for a tag, so the caller keeps its
-    default claim when this is ``False``.
+    default claim when this is ``False``. The page may show it with the probe's
+    word and a marker the application rewrote, so the word counts too.
     """
-    return bool(page and marker and marker in page)
+    return _word_reaches_the_page(page, marker)
 
 
 def _an_element_survives(page: str, marker: str, record_text: str = "") -> bool:
@@ -1122,38 +1221,47 @@ def _an_element_survives(page: str, marker: str, record_text: str = "") -> bool:
     - An element whose own child text is the probe's text (*record_text*), with
       the marker written after it. The tag is not pinned: a page that
       re-serialises the record may answer with ``strong`` for the ``b`` it was
-      given, carry an attribute of its own, or wrap it.
+      given, carry an attribute of its own, or wrap it. The word is looked for
+      by shape: an application that escapes the value on the way out leaves
+      something of it behind, and refusing to recognise that made a page which
+      keeps whole markup answer as if it had stripped it.
     - The record in an attribute the browser reads as markup — ``srcdoc``,
-      ``src``, ``style``. No element is created at parse time, but the value is
-      parsed as markup when the element is used.
+      ``style``. No element is created at parse time, but the value is parsed
+      as markup when the element is used.
 
     Any other attribute holds text, whatever tag its value contains: a record
-    quoted into ``value="…"`` kept nothing executable.
+    quoted into ``value="…"`` or into an ``<img src>`` kept nothing executable.
     """
-    if not page or not marker or marker not in page:
+    if not page or not marker:
         return False
+    word = _word_near(page, marker, record_text)
     soup = BeautifulSoup(page, "html.parser")
     for tag in soup.find_all(True):
         for name, value in tag.attrs.items():
             if isinstance(value, (list, tuple)):
                 value = " ".join(str(v) for v in value)
-            if str(name).lower() in _MARKUP_ATTRIBUTES and marker in str(value):
+            if not word or not _read_as_markup(tag, str(name)):
+                continue
+            # The record is this probe's: it wrote the marker and, right after
+            # it, ``w`` and the word's digits. Two records on one page are told
+            # apart by that trail, however the page escaped either half.
+            trail = re.escape(marker) + r"(?:</[a-zA-Z0-9]+>)*w" + re.escape(word[3:])
+            if re.search(trail, _letters(str(value))):
                 return True
-        if not record_text:
+        if not word:
             continue
         # The probe's text has to be an element's own child text, not its whole
         # subtree: a paragraph holding the record would answer for a tag nested
         # anywhere inside it.
-        if record_text not in "".join(
-            str(c) for c in tag.children if not getattr(c, "name", None)
+        if word not in _letters(
+            "".join(str(c) for c in tag.children if not getattr(c, "name", None))
         ):
             continue
         # The marker was written after the element. A page that re-serialises
         # the record keeps both under the same parent, so what follows the
         # element among its siblings is where to look. Walking on past the
         # parent would match any later occurrence of the word on the page.
-        tail = "".join(str(node) for node in tag.next_siblings)
-        if marker in tail:
+        if marker in "".join(str(node) for node in tag.next_siblings):
             return True
     return False
 
