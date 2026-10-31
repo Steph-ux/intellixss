@@ -15,6 +15,7 @@ if TYPE_CHECKING:
     from intellixss.models import ScanResult, XSSFinding
 
 from intellixss.models import reproduce_command
+from intellixss.scanner.cleanup import cleanup_summary
 
 _SEV_CLASS = {
     "critical": "sev-critical",
@@ -79,6 +80,44 @@ def _finding_block(i: int, f: "XSSFinding") -> str:
       <div class="kv"><span>Reproduce</span><code class="break payload">{html.escape(reproduce_command(f))}</code></div>
       <div class="fix"><span>Remediation</span>{html.escape(_remediation(f.vulnerability_type, f.context.value))}</div>
     </article>"""
+
+
+def _cleanup_rows(rows: List) -> str:
+    """What the scan wrote on the target, and what became of each record.
+
+    A report that shows only findings hides the one lasting side effect of a
+    writing scan. Every record is listed with its removal state so nothing is
+    left for someone to find on the target by accident.
+    """
+    if not rows:
+        return "<p class='empty'>None — this scan wrote nothing to the target.</p>"
+    body = []
+    for row in rows:
+        removed = bool(row.get("removed"))
+        note = row.get("reason") or ""
+        if not row.get("cleanable") and not note:
+            note = "no identifier in the create response"
+        body.append(
+            "<tr>"
+            f"<td><code>{html.escape(str(row.get('surface') or ''))}</code></td>"
+            f"<td class='break'>{html.escape(str(row.get('create_url') or '')[:200])}</td>"
+            f"<td>{'yes' if removed else 'no'}</td>"
+            f"<td>{html.escape(note)}</td>"
+            "</tr>"
+        )
+    summary = cleanup_summary(rows)
+    left = summary["records"] - summary["removed"]
+    head = (
+        "<table><thead><tr><th>Surface</th><th>Created at</th><th>Removed</th>"
+        "<th>Note</th></tr></thead><tbody>"
+    )
+    foot = "</tbody></table>"
+    if left:
+        foot += (
+            f"<p class='caveat'>{left} record(s) could not be removed and are "
+            "still on the target. Remove them by hand from the surfaces above.</p>"
+        )
+    return head + "".join(body) + foot
 
 
 def _diag_rows(diags: List) -> str:
@@ -246,6 +285,9 @@ def write_html_report(result: "ScanResult", path: str, version: str = "3.3.0") -
 
     <h2>Findings</h2>
     {blocks if blocks else "<p class='empty'>No findings.</p>"}
+
+    <h2>Records created by this scan</h2>
+    {_cleanup_rows(result.cleanup)}
 
     <h2>Diagnostics</h2>
     {

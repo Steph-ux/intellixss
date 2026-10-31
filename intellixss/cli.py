@@ -27,6 +27,7 @@ from intellixss.config import Config
 from intellixss.models import ScanResult, Severity, XSSFinding, reproduce_command
 from intellixss.report.html_report import write_html_report
 from intellixss.scanner.orchestrator import Scanner, result_to_json
+from intellixss.scanner.cleanup import cleanup_summary
 
 colorama_init(autoreset=True)
 
@@ -430,6 +431,48 @@ def render_diagnoses(result: ScanResult, console: "Console") -> None:
     console.print(table)
 
 
+def render_cleanup(result: ScanResult, console: "Console") -> None:
+    """What the scan wrote, what it removed, and what it could not.
+
+    A writing scan creates records on the target. Saying nothing about them
+    leaves someone to discover them by hand, so every one is listed: the ones
+    removed, and the ones that are still there with the reason it could not be
+    otherwise.
+    """
+    if not result.cleanup:
+        return
+    summary = cleanup_summary(result.cleanup)
+    table = Table(
+        title="Records created by this scan",
+        title_style="bold",
+        header_style="bold cyan",
+        expand=True,
+    )
+    table.add_column("Surface", width=20)
+    table.add_column("Created at", ratio=3)
+    table.add_column("Removed", width=8, justify="center")
+    table.add_column("Note", ratio=3)
+    for row in result.cleanup:
+        removed = bool(row.get("removed"))
+        note = row.get("reason") or ""
+        if not row.get("cleanable") and not note:
+            note = "no identifier in the create response"
+        table.add_row(
+            Text(str(row.get("surface") or ""), style="dim"),
+            str(row.get("create_url") or "")[:120],
+            Text("yes", style="green") if removed else Text("no", style="yellow"),
+            note,
+        )
+    console.print(table)
+    if summary["uncleanable"] or summary["removed"] < summary["records"]:
+        console.print(
+            f"  {summary['records']} record(s) written, {summary['removed']} removed, "
+            f"{summary['records'] - summary['removed']} left on the target — "
+            "remove them by hand from the surfaces listed above.",
+            style="yellow",
+        )
+
+
 def render_plain(result: ScanResult) -> None:
     """Fallback renderer: clean, greppable, no rich."""
     print(f"\n=== Scan summary: {result.target_url} ===")
@@ -478,6 +521,7 @@ async def _run_one(url: str, cfg: Config, quiet: bool) -> tuple[ScanResult, int]
             console.print()
             render_summary(result, console)
             render_findings(result, console, verbose=cfg.verbose)
+            render_cleanup(result, console)
             render_diagnoses(result, console)
         else:
             render_plain(result)

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import random
 import time
+from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
@@ -32,6 +33,41 @@ def writes_allowed(config: Config) -> bool:
     cannot drift between the plugins that write.
     """
     return bool(getattr(config, "writes", False))
+
+
+@dataclass
+class WrittenRecord:
+    """A record a scan created, and the best guess at how to remove it.
+
+    A writing scan leaves data behind. Recording each write as it is made is
+    what lets the run clean up after itself instead of leaving the target with
+    test comments someone has to delete by hand; ``delete_url`` is empty when
+    the response never told the scanner which identifier the record got.
+    """
+
+    surface: str
+    create_url: str
+    method: str
+    delete_url: str = ""
+    delete_method: str = "DELETE"
+    reason: str = ""
+    removed: int = 0
+
+    @property
+    def cleanable(self) -> bool:
+        return bool(self.delete_url)
+
+    def describe(self) -> Dict[str, Any]:
+        return {
+            "surface": self.surface,
+            "create_url": self.create_url,
+            "method": self.method,
+            "delete_url": self.delete_url,
+            "delete_method": self.delete_method,
+            "cleanable": self.cleanable,
+            "removed": self.removed,
+            "reason": self.reason,
+        }
 
 
 class HttpClient:
@@ -63,6 +99,36 @@ class HttpClient:
         # can be distinguished from a scan that was silently prevented from
         # probing the write paths at all.
         self.writes_refused = 0
+        # Records this scan created on the target, in order, so the run can
+        # state what it left behind and remove what it is able to remove.
+        self.written: List[WrittenRecord] = []
+
+    def note_write(
+        self,
+        surface: str,
+        create_url: str,
+        method: str,
+        delete_url: str = "",
+        delete_method: str = "DELETE",
+        reason: str = "",
+    ) -> WrittenRecord:
+        """Record a write the instant it is made, before its outcome is judged.
+
+        Registering at the call site rather than after the finding is
+        confirmed is deliberate: a probe that is stored but never confirmed is
+        still a record on the target, and it is the one most likely to be
+        forgotten.
+        """
+        rec = WrittenRecord(
+            surface=surface,
+            create_url=create_url,
+            method=method.upper(),
+            delete_url=delete_url,
+            delete_method=delete_method,
+            reason=reason,
+        )
+        self.written.append(rec)
+        return rec
 
     async def __aenter__(self) -> "HttpClient":
         if self._session is None:

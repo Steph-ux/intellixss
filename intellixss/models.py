@@ -468,6 +468,9 @@ class ScanResult:
     errors: List[str] = field(default_factory=list)
     waf: str = ""
     stats: ScanStats = field(default_factory=ScanStats)
+    # Records the scan created on the target and what became of them. Empty on
+    # a read-only scan, which creates nothing.
+    cleanup: List[Dict[str, Any]] = field(default_factory=list)
 
     @property
     def confirmed(self) -> List[XSSFinding]:
@@ -499,6 +502,7 @@ class ScanResult:
             "diagnoses": [d.to_dict() for d in self.diagnoses],
             "targets_tested": self.targets_tested,
             "errors": self.errors,
+            "cleanup": self.cleanup,
         }
 
 

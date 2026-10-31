@@ -38,6 +38,9 @@ def _run_scan_order() -> list:
         """The seed request is all the HTTP this test needs to answer."""
 
         requests = 0
+        # The real client exposes what it wrote so the run can clean up after
+        # itself; a double that omits it is not a client.
+        written: list = []
 
         def __init__(self, *a, **kw):
             pass

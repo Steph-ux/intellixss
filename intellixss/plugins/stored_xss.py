@@ -281,6 +281,7 @@ async def scan_server_stored(
     max_payloads: int = 6,
     log=None,
     json_body: bool = False,
+    on_write=None,
 ) -> List[XSSFinding]:
     """
     Classic stored XSS:
@@ -351,12 +352,19 @@ async def scan_server_stored(
     # 1) Canary — does storage persist?
     canary = f"ixc{uid}"
     data[field] = canary
-    st, body, _, fin = await _send(canary)
+    st, body, hdrs, fin = await _send(canary)
     if st == 0:
         return findings
     if st >= 400 and (method.upper() == "POST" or json_body):
         log(f"stored: {method.upper()} {st} on {form_url[:60]} — skipping", "debug")
         return findings
+    if on_write is not None:
+        # The canary write is what creates the record, so its response is the
+        # only place the target names the identifier that can remove it.
+        try:
+            on_write(fin or form_url, body, hdrs or {}, own_id=canary)
+        except Exception as exc:  # a callback must never fail a scan
+            log(f"stored: write callback failed: {exc}", "debug")
 
     stored = False
     render_body = ""

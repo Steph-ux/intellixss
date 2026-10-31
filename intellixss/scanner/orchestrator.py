@@ -83,6 +83,7 @@ from intellixss.plugins.stored_xss import (
     scan_stored_auto,
 )
 from intellixss.plugins.upload_xss import scan_upload_xss
+from intellixss.scanner.cleanup import clean_written, cleanup_summary, delete_url_from_response
 from intellixss.verify.browser import BrowserConfirmer
 from intellixss.verify.check import evaluate_response
 
@@ -382,6 +383,26 @@ class Scanner:
                     self._log(
                         f"deduped findings: {before} -> {len(result.findings)}", "info"
                     )
+
+                # Cleanup has to run while the session is still open: it sends
+                # its own requests, and a client whose session is closed asserts
+                # on the first one, which is how the first version of this
+                # silently failed on every writing scan.
+                if client.written:
+                    try:
+                        rows = await clean_written(client)
+                        result.cleanup = rows
+                        summary = cleanup_summary(rows)
+                        self._log(
+                            f"cleanup — created={summary['records']} "
+                            f"removed={summary['removed']} "
+                            f"not cleanable={summary['uncleanable']}",
+                            "info",
+                        )
+                    except BaseException as exc:  # must not lose the scan
+                        detail = f"{type(exc).__name__}: {exc}".strip()
+                        self._log(f"cleanup failed: {detail}", "warn")
+                        result.errors.append(f"cleanup failed: {detail}")
         finally:
             await self.browser.stop()
             result.stats.finished_at = time.monotonic()
@@ -1137,6 +1158,36 @@ class Scanner:
         render = [target.source_url or target.url]
         if form_page and form_page not in render:
             render.append(form_page)
+        # A read-only scan writes nothing here, so it registers nothing: a
+        # registration is a statement that a record exists on the target, and
+        # reporting a phantom record is as wrong as missing a real one. The pass
+        # still runs, because the HTTP client refuses the write anyway.
+        record = None
+        if writes_allowed(self.config):
+            # The record is registered before the plugin runs, not after a
+            # finding comes back: a probe that the target stored and the scan
+            # then failed to confirm is still a record on the target, and it is
+            # the one most likely to be forgotten. What the response says about
+            # its id is the only thing that can make the removal safe, so it is
+            # read from this target's own probe response rather than
+            # reconstructed from a pattern.
+            record = client.note_write(
+                surface=f"stored:{param}",
+                create_url=target.url,
+                method="POST",
+            )
+
+        def _note(create_url: str, body: str, headers: Dict[str, str], own_id: str = "") -> None:
+            # The plugin reports the *final* url of its canary write; the delete
+            # is built from it and from what the response itself named.
+            if record is None:
+                return
+            record.delete_url = delete_url_from_response(
+                create_url or target.url, body, headers, own_id=own_id
+            )
+            if not record.delete_url:
+                record.reason = "the create response named no identifier"
+
         findings = await scan_server_stored(
             client,
             target.url,
@@ -1147,6 +1198,7 @@ class Scanner:
             browser=self.browser,
             max_payloads=min(6, self.config.max_payloads_per_param),
             log=self._log,
+            on_write=_note,
         )
         async with lock:
             for f in findings:
