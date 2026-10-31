@@ -30,6 +30,7 @@ node, so a broken statement costs that statement and not the file.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import re
 from typing import Dict, List, Optional, Tuple
 
 from tree_sitter import Language, Node, Parser
@@ -195,6 +196,36 @@ _SINK_METHODS: Dict[str, Tuple[str, str]] = {
 # their parameter carries. The receiver decides: ``.then`` on ``fetch(...)`` is
 # a response, ``.then`` on a promise of a number is not.
 _RESPONSE_METHODS = {"then", "catch", "finally"}
+# The observable equivalent: the callback is handed the request's result.
+_SUBSCRIPTION_METHODS = {"subscribe"}
+# Methods that send a request. ``http.get(url).subscribe(…)`` hands the
+# callback a response, so the verb is what names it — but only when the object
+# it is called on is itself named like a request client, or every ``.get`` in a
+# bundle would become a source.
+_HTTP_VERBS = {"get", "post", "put", "patch", "delete", "head", "options", "request"}
+
+
+def _looks_like_request(base: str) -> bool:
+    """Whether a name reads as a client that sends requests.
+
+    The vocabulary is deliberately about *requests*, not about "anything with a
+    dot": ``interval.get`` must stay untainted, and the only way to tell it from
+    ``http.get`` is the name of the object it is called on.
+    """
+    return bool(
+        re.search(
+            r"(?i)(http|api|request|client|xhr|fetch|ajax|backend|server|resource)",
+            base,
+        )
+    )
+
+
+def _is_verb_prefix(prop: str) -> bool:
+    """``getExport`` / ``postData``: a verb glued in front of a noun."""
+    head = re.match(r"(?i)^(get|post|put|patch|delete|head|fetch|load|request)", prop)
+    return head is not None and len(prop) > head.end()
+
+
 _HTML_SINKS = {"innerHTML", "insertAdjacentHTML", "document.write", "jquery.html",
                "jquery.append", "jquery.prepend", "jquery_selector", "setAttribute_on",
                "inline_handler_assign"}
@@ -202,6 +233,11 @@ _HTML_SINKS = {"innerHTML", "insertAdjacentHTML", "document.write", "jquery.html
 
 def _text(node: Node, src: bytes) -> str:
     return src[node.start_byte : node.end_byte].decode("utf-8", "replace")
+
+
+def _span(node: Node) -> Tuple[str, int, int]:
+    """The identity of a parse node across two reads of the same tree."""
+    return (node.type, node.start_byte, node.end_byte)
 
 
 def _child(node: Node, field_name: str) -> Optional[Node]:
@@ -396,6 +432,11 @@ def _taint_parameters_by_call(resolver: "_Resolver") -> None:
             body = _child(fblock.value, "body")
             if body is None:
                 continue
+            # The body may already carry its sinks: a callback claimed by a
+            # promise was walked once while its parameter was bound. Walking it
+            # again records the same statement twice, so the block starts from
+            # whatever the join itself has not produced yet.
+            del fblock.tainted_writes[:]
             if body.type == "statement_block":
                 for child in body.children:
                     resolver.walk(child, fblock)
@@ -453,6 +494,26 @@ class _Resolver:
         self.blocks: List[Block] = []
         self._next = block_index
         self._cursor = 0
+        # Field taint, keyed by the class that owns the field. A field is not a
+        # global name: two components that each declare ``userData`` hold two
+        # different values, and keying by name alone is exactly the collision
+        # that makes the regex analyser credit flows from unrelated code.
+        self._fields: Dict[Tuple[int, str], Taint] = {}
+        # The class body each class-declaring name refers to, so ``new S()``
+        # and ``this`` inside ``S`` resolve to the same set of fields.
+        self._class_of_name: Dict[str, int] = {}
+        # Field writes noticed while walking, applied once the whole program has
+        # been read. Each write keeps the block it was made in, because that is
+        # the scope its value resolves in — ``this.userData = t.userData`` means
+        # nothing in the class body, where ``t`` is not visible.
+        self._field_writes: List[Tuple[Node, int, str, int]] = []
+        # The root of the parsed program and its block, kept for the sink index
+        # the field pass builds lazily.
+        self._root: Optional[Node] = None
+        self._program: Optional[Block] = None
+        self._sink_sites: Optional[Dict[str, List[Tuple[Node, "Block"]]]] = None
+        # ``(type, start, end)`` -> the block whose value is that node.
+        self._by_span: Dict[Tuple[str, int, int], Block] = {}
 
     # -- block bookkeeping ------------------------------------------------
 
@@ -463,6 +524,17 @@ class _Resolver:
         if parent is not None:
             self.blocks[parent].children.append(b.index)
         return b
+
+    def _set_value(self, block: Block, node: Node) -> None:
+        """Attach *node* to *block* and index it for ``_block_of``.
+
+        The index has to follow the value: the scope keyed on a variable
+        declarator and the walk keyed on the function it wraps assign the same
+        block at different moments, and a lookup that missed one of them would
+        create a duplicate block and split a scope in two.
+        """
+        block.value = node
+        self._by_span[_span(node)] = block
 
     def _bind(self, block: Block, name: str, kind: str, taint: Optional[Taint]) -> Binding:
         existing = block.binding(name)
@@ -488,6 +560,69 @@ class _Resolver:
             seen += 1
         return None
 
+    # -- field identity ---------------------------------------------------
+
+    def _owning_class(self, block_index: int) -> Optional[int]:
+        """The innermost class block enclosing *block_index*, if any.
+
+        ``this`` inside a method belongs to the class that declares it, however
+        deeply a callback is nested in that method, so a field write made in a
+        subscription callback resolves to the enclosing class rather than to
+        the callback it sits in.
+        """
+        idx: Optional[int] = block_index
+        seen = 0
+        while idx is not None and seen < 64:
+            if self.blocks[idx].kind == "class":
+                return idx
+            idx = self.blocks[idx].parent
+            seen += 1
+        return None
+
+    def _field_owner(self, node: Optional[Node], block: Block) -> Optional[int]:
+        """The class whose field *node* names, or None when it names none.
+
+        ``this.userData`` is a field of the enclosing class. ``s.userData`` is a
+        field of the class ``s`` was constructed from. Anything else — an object
+        literal's property, a computed member, a name that is not a class — is
+        not a field, and guessing here is what produces flows from nothing.
+        """
+        if node is None or node.type not in ("member_expression", "subscript_expression"):
+            return None
+        base, prop, kind = _member_parts(node, self.src_bytes)
+        if kind == "computed" or not prop:
+            return None
+        if base == "this":
+            return self._owning_class(block.index)
+        b = self._lookup(block.index, base)
+        if b is not None and b.kind == "class":
+            return self._class_of_name.get(base)
+        if b is not None and b.value is not None:
+            # ``var s = new S()``: the instance holds the fields of its class,
+            # so the field is identified by the class body, not by the variable.
+            return self._class_body_of_expression(b.value, block)
+        return self._class_of_name.get(base)
+
+    def _class_body_of_expression(self, node: Node, block: Block) -> Optional[int]:
+        """The class body a field expression's owner resolves to, if it is one.
+
+        Only two shapes resolve: ``new S(…)`` in the variable's initializer, and
+        a ternary that picks between constructors. Anything else — a value that
+        came back from a function, a property of something else — is not proven
+        to be an instance, and a field read off it is left untainted.
+        """
+        if node.type == "new_expression":
+            ctor = _child(node, "constructor") or (node.child(1) if node.child_count > 1 else None)
+            if ctor is not None and ctor.type == "identifier":
+                return self._class_of_name.get(_name_of(ctor, self.src_bytes))
+            return None
+        if node.type in ("ternary_expression", "parenthesized_expression"):
+            for c in node.children:
+                found = self._class_body_of_expression(c, block)
+                if found is not None:
+                    return found
+        return None
+
     # -- pass 1: declarations -------------------------------------------
 
     def declare(self, node: Node, block: Block) -> None:
@@ -501,7 +636,10 @@ class _Resolver:
                 bound.value = child
             elif t in ("class_declaration",):
                 name = _child(child, "name")
-                self._bind(block, _name_of(name, self.src_bytes), "class", None)
+                bound = self._bind(block, _name_of(name, self.src_bytes), "class", None)
+                # The node is what an instance is resolved through: ``new S()``
+                # holds the fields the class ``S`` declares, not its own.
+                bound.value = child
             elif t in ("variable_declaration", "lexical_declaration"):
                 head = _text(child, self.src_bytes)
                 kind = "const" if head.startswith("const") else ("let" if head.startswith("let") else "var")
@@ -526,7 +664,7 @@ class _Resolver:
                         holder = self._bind(block, _name_of(target, self.src_bytes), kind, None)
                         holder.value = value
                     inner = self._new_block(value.type, "", block.index)
-                    inner.value = value
+                    self._set_value(inner, value)
                     for p in _params_of(value):
                         self._declare_pattern(p, inner, "param")
                     body = _child(value, "body")
@@ -651,8 +789,13 @@ class _Resolver:
                 for a in args.children:
                     if a.type in ("(", ")", ","):
                         continue
-                    if a.type in ("arrow_function", "function_expression"):
-                        continue
+                    # A callback handed directly is claimed by ``_bind_callback``
+                    # when the receiver is a promise or a subscription, and
+                    # analysed as its own block otherwise. One nested a level
+                    # deeper, inside an options object, meets ``_function``
+                    # through the generic branch and must obey the same rule,
+                    # which ``_function`` enforces by filling a block it finds
+                    # rather than creating a second one.
                     self.walk(a, block)
             return
 
@@ -669,6 +812,14 @@ class _Resolver:
             taint = self._pattern_source(name_node, value, block)
         if name_node is not None:
             self._apply_pattern(name_node, block, taint)
+            # ``var s = new S()``: the initializer is what lets a field read off
+            # the instance be identified as the class's field. Only a plain
+            # identifier keeps it; a pattern declares several names and would
+            # attribute one initializer to all of them.
+            if name_node.type == "identifier":
+                bound = block.binding(_name_of(name_node, self.src_bytes))
+                if bound is not None and bound.value is None:
+                    bound.value = value
         if value is not None:
             self.walk(value, block)
 
@@ -741,6 +892,12 @@ class _Resolver:
 
         if left is not None and left.type in ("member_expression", "subscript_expression"):
             base, prop, kind = _member_parts(left, self.src_bytes)
+            # The value a field now holds. Recorded by node, not applied here:
+            # the class that owns the field may not have been walked yet, and
+            # the value has to resolve in the block it was written in.
+            owner = self._field_owner(left, block)
+            if owner is not None and right is not None:
+                self._field_writes.append((right, owner, prop, block.index))
             # A sink is only a sink when the property is written literally, and
             # ``obj[key] = value`` names no property: it is not followed.
             if kind != "computed" and taint is not None:
@@ -760,10 +917,16 @@ class _Resolver:
 
     def _function(self, node: Node, block: Block) -> None:
         name_node = _child(node, "name")
-        inner = self._new_block(node.type, _name_of(name_node, self.src_bytes) if name_node else "", block.index)
-        inner.value = node
-        for p in _params_of(node):
-            self._declare_pattern(p, inner, "param")
+        # A promise or subscription callback already has its block, created by
+        # ``_bind_callback`` so its parameter could hold the response before the
+        # body was read. The body is filled in here rather than in a second
+        # block, which is what keeps the taint and the sink on one symbol.
+        inner = self._block_of(node)
+        if inner is None:
+            inner = self._new_block(node.type, _name_of(name_node, self.src_bytes) if name_node else "", block.index)
+            self._set_value(inner, node)
+            for p in _params_of(node):
+                self._declare_pattern(p, inner, "param")
         params = _child(node, "parameters") or _child(node, "parameter")
         body = _child(node, "body")
         if body is not None:
@@ -785,6 +948,13 @@ class _Resolver:
         if body is None:
             return
         inner = self._new_block("class", "", block.index)
+        # The class body is the identity a field belongs to. ``class S`` and
+        # ``new S()`` both resolve here, which is what lets a field written as
+        # ``this.userData`` be read as ``s.userData`` later.
+        self._set_value(inner, body)
+        name = _child(node, "name") or _child(node, "class") or _child(node, "left")
+        if name is not None and name.type == "identifier":
+            self._class_of_name[_name_of(name, self.src_bytes)] = inner.index
         for member in body.children:
             if member.type not in ("field_definition", "method_definition"):
                 continue
@@ -815,6 +985,19 @@ class _Resolver:
                     args=_arguments_of(args),
                 )
             )
+        self._record_sinks(node, block)
+
+    def _record_sinks(self, node: Node, block: Block) -> None:
+        """Record the sinks this call reaches, and nothing else.
+
+        Separated from ``_call`` so the field pass can revisit statements for
+        their sinks without registering a second call site: a call counted
+        twice would let the parameter join treat one argument as two.
+        """
+        fn = _child(node, "function") or node.child(0)
+        args = _child(node, "arguments")
+        if fn is None:
+            return
 
         # (a) A sink method: ``el.insertAdjacentHTML('beforeend', v)``.
         if fn.type in ("member_expression", "subscript_expression"):
@@ -831,6 +1014,29 @@ class _Resolver:
             if kind != "computed" and prop in _RESPONSE_METHODS and args is not None:
                 cb = next((c for c in args.children if c.type in ("arrow_function", "function_expression")), None)
                 if cb is not None and self._returns_a_response(_child(fn, "object")):
+                    self._bind_callback(cb, block, Taint("fetch response"))
+            # (d) ``request.subscribe({next: v => …})``: the Angular idiom for
+            # the same thing. The callback is named in the options object rather
+            # than passed directly, so it is reached through ``next``/``error``.
+            if kind != "computed" and prop in _SUBSCRIPTION_METHODS and args is not None:
+                cb = None
+                for a in args.children:
+                    if a.type == "object":
+                        for pair in a.children:
+                            key = _child(pair, "key")
+                            if key is not None and _name_of(key, self.src_bytes) == "next":
+                                cb = _child(pair, "value")
+                                break
+                    elif a.type in ("arrow_function", "function_expression"):
+                        cb = a
+                # Only a subscription on something that is a request delivers a
+                # response. ``interval.subscribe`` ticks a number, and crediting
+                # it would make every observable in a bundle a source.
+                if (
+                    cb is not None
+                    and cb.type in ("arrow_function", "function_expression")
+                    and self._returns_a_response(_child(fn, "object"))
+                ):
                     self._bind_callback(cb, block, Taint("fetch response"))
 
         # (c) jQuery's ``$(html)`` parses a string as markup.
@@ -882,24 +1088,92 @@ class _Resolver:
                 # back to the request that started it.
                 if prop in _RESPONSE_METHODS:
                     return self._returns_a_response(_child(fn, "object"))
+                # ``http.get(url)`` / ``api.post(url, body)``: the verb names the
+                # request. A bare ``.get`` on something unrelated is the price
+                # of that — which is why the base has to be request-shaped too.
+                if prop in _HTTP_VERBS or _is_verb_prefix(prop):
+                    # ``http.get`` and ``this.http.get`` name a client alike; the
+                    # base is read to its last segment, because ``this.svc`` is a
+                    # property of ``this`` and ``this`` names nothing on its own.
+                    base = _text(_child(fn, "object"), self.src_bytes)
+                    if not base:
+                        return False
+                    return _looks_like_request(base.rsplit(".", 1)[-1])
                 return False
         return False
 
     def _bind_callback(self, cb: Node, block: Block, taint: Taint) -> None:
-        """Give the callback's first parameter *taint*, then analyse its body."""
+        """Create the callback's block and bind its first parameter to *taint*.
+
+        The body is deliberately left to ``walk``, which reaches the callback
+        on its own and is the one place that decides whether a function already
+        has a block. Walking it here as well analysed every promise callback
+        twice: two blocks, two sinks, one statement.
+        """
+        inner = self._block_of(cb)
+        if inner is not None:
+            # The same callback is examined by every link of the chain it sits
+            # in; the first link that recognised it already bound its parameter.
+            return
         inner = self._new_block(cb.type, "", block.index)
+        self._set_value(inner, cb)
         for i, p in enumerate(_params_of(cb)):
             self._declare_pattern(p, inner, "param")
             if i == 0 and p.type == "identifier":
                 self._bind(inner, _name_of(p, self.src_bytes), "param", taint)
-        body = _child(cb, "body")
-        if body is not None:
-            if body.type == "statement_block":
-                self.declare(body, inner)
-                for child in body.children:
-                    self.walk(child, inner)
-            else:
-                self.walk(body, inner)
+
+    def _sinks_reading(self, field: Tuple[int, str]) -> List[Tuple[Node, Block]]:
+        """Every sink statement in the program that reads ``.prop`` off a field.
+
+        Built on first use by one pass over the tree and cached, because the
+        alternative — re-walking the program for each field that becomes
+        tainted — is quadratic on a bundle and took minutes on ``main.js``.
+        A candidate is a statement that both carries a sink (an assignment to a
+        sink property, or a call to a sink method) and mentions the property
+        name. Mentioning it is a necessary condition, not a sufficient one:
+        ``_replay_statement`` decides, using the ordinary taint rules.
+        """
+        if self._sink_sites is None:
+            index: Dict[str, List[Tuple[Node, Block]]] = {}
+            stack: List[Tuple[Node, Block]] = [(self._root, self._program)]
+            while stack:
+                node, block = stack.pop()
+                arg = _sink_argument_node(node)
+                if arg is not None:
+                    for prop in _properties_in(arg):
+                        index.setdefault(prop, []).append((node, block))
+                if node.type in ("arrow_function", "function_expression",
+                                 "method_definition", "function_declaration",
+                                 "generator_function_declaration", "class_declaration"):
+                    inner = self._block_of(node)
+                    body = _child(node, "body")
+                    if node.type == "class_declaration":
+                        inner = self._block_of(body) if body is not None else None
+                    if inner is not None:
+                        stack.append((body if body is not None else node, inner))
+                    continue
+                for child in node.children:
+                    stack.append((child, block))
+            self._sink_sites = index
+        return self._sink_sites.get(field[1], [])
+
+    def _replay_statement(self, node: Node, block: Block) -> None:
+        """Record the sink of one statement now that its argument can resolve."""
+        if node.type == "assignment_expression":
+            self._assignment(node, block)
+            return
+        self._record_sinks(node, block)
+
+    def _block_of(self, node: Node) -> Optional[Block]:
+        """The block already created for *node*, matched by position.
+
+        Tree-sitter hands out a fresh wrapper for the same node each time it is
+        read, so ``id()`` says nothing; the byte range does. The range is held
+        in an index rather than searched for: a bundle makes thousands of these
+        lookups, and a scan of every block per lookup turned a 19-second
+        analysis into a two-minute one.
+        """
+        return self._by_span.get(_span(node))
 
     def _resolve_references(self, body: Node, block: Block, params: Optional[Node]) -> None:
         """Record each identifier read inside *body* and the symbol it resolves to."""
@@ -941,6 +1215,14 @@ class _Resolver:
             base, prop, kind = _member_parts(node, self.src_bytes)
             if kind == "dot" and (_text(_child(node, "object"), self.src_bytes), prop) in _SOURCE_MEMBERS:
                 return Taint(_SOURCE_MEMBERS[(_text(_child(node, "object"), self.src_bytes), prop)])
+            # A field holds the value last written to it. Without this, a
+            # component that stores a response and writes the field elsewhere
+            # reports nothing: the taint dies at ``this.userData``.
+            owner = self._field_owner(node, block)
+            if owner is not None:
+                held = self._fields.get((owner, prop))
+                if held is not None:
+                    return held
             obj = _child(node, "object")
             return self.taint_of(obj, block, depth + 1)
 
@@ -1031,9 +1313,83 @@ def resolve_scopes(scripts: List[str]) -> List[Block]:
     resolver = _Resolver(source)
     program = resolver._new_block("program", "", None)
     root = tree.root_node
+    resolver._root = root
+    resolver._program = program
     resolver.declare(root, program)
     for child in root.children:
         resolver.walk(child, program)
     resolver._resolve_references(root, program, None)
+    _apply_field_writes(resolver, root, program)
     _taint_parameters_by_call(resolver)
     return resolver.blocks
+
+
+def _apply_field_writes(resolver: "_Resolver", root: Node, program: Block) -> None:
+    """Commit field writes to the fields that hold them, and read them back.
+
+    The write records are walked once, in creation order, which is source
+    order: a write can only read a field that an earlier statement set. One
+    pass is enough for the ordinary shapes, and it is what keeps a 1.2 MB
+    bundle at seconds — the first version re-walked the whole program on every
+    round.
+
+    A sink that writes a field recorded nothing while the body was first read,
+    because the field held no value yet. Those statements are collected in that
+    same pass and replayed directly, which costs one visit per sink and never
+    touches a declaration or a call site.
+    """
+    if not resolver._field_writes:
+        return
+    deferred: List[Tuple[Node, Block]] = []
+    for right, owner, prop, writer in resolver._field_writes:
+        block = resolver.blocks[writer]
+        taint = resolver.taint_of(right, block)
+        if taint is None:
+            continue
+        held = resolver._fields.get((owner, prop))
+        resolver._fields[(owner, prop)] = taint if held is None else held.merge(taint)
+        deferred.extend(resolver._sinks_reading((owner, prop)))
+    seen = set()
+    for node, block in deferred:
+        key = (node.start_byte, node.end_byte, block.index)
+        if key in seen:
+            continue
+        seen.add(key)
+        resolver._replay_statement(node, block)
+
+
+def _sink_argument_node(node: Node) -> Optional[Node]:
+    """The value node of a sink statement, or None if *node* is not one."""
+    if node.type == "assignment_expression":
+        left = _child(node, "left")
+        if left is None or left.type not in ("member_expression", "subscript_expression"):
+            return None
+        return _child(node, "right")
+    if node.type == "call_expression":
+        fn = _child(node, "function") or (node.child(0) if node.child_count else None)
+        if fn is None or fn.type not in ("member_expression", "subscript_expression"):
+            return None
+        args = _child(node, "arguments")
+        if args is None:
+            return None
+        values = [c for c in args.children if c.type not in ("(", ")", ",")]
+        return values[0] if values else None
+    return None
+
+
+def _properties_in(node: Node) -> List[str]:
+    """Every property name mentioned anywhere inside *node*.
+
+    The index keys a sink statement by the property names it reads, so the
+    value node is searched once. Sinks read short expressions — an identifier
+    or a member — so this stays cheap.
+    """
+    out: List[str] = []
+    stack = [node]
+    while stack:
+        n = stack.pop()
+        if n.type == "property_identifier":
+            out.append(n.text.decode("utf-8", "replace"))
+        stack.extend(n.children)
+    return out
+
