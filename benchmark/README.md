@@ -84,9 +84,32 @@ write targets, and the stored pass drives the forms the page renders. A session
 is opened with the public `admin@juice-sh.op` account the application ships
 with, because two of the sinks are behind a login.
 
-Nothing is tuned per surface. The six surfaces are six scans of the same page;
-each one is graded only on the sink it is about, so a finding on one API cannot
-be credited to another.
+Nothing is tuned per surface. Each surface is a scan of the same page, graded
+only on the sink it is about — the endpoint *and* the field — so a finding on
+one API, or on another field of the same API, cannot be credited to it.
+
+Three surfaces need state an anonymous page does not have. For those the harness
+supplies identity and transport only, never a payload:
+
+| Surface | What the harness supplies | Why |
+|---|---|---|
+| `last-login-ip` | a throwaway account, and the `True-Client-IP` header | the header is stored on the session's user and read back from the browser |
+| `profile` | a throwaway account | the sink is the account's own stored username |
+| `complaints`, `reviews`, `login` | the admin bearer | the forms sit behind a login |
+
+The header value the harness sends is a plain word, not markup: the scanner has
+to find that the header reaches storage and prove it executes. The throwaway
+account is registered through `POST /api/Users` like any visitor's would be.
+The report names, per surface, what was supplied, so a result obtained with a
+session is never presented as one obtained without.
+
+Each run writes records into the database the application reads back. The bench
+is defined against seed data, so reset before measuring:
+
+```powershell
+powershell -File bench/reset-shop.ps1   # stops the server, drops the SQLite file
+node build/app.js                       # rebuilds it from seed data
+```
 
 ### Scoring
 
@@ -100,17 +123,29 @@ executing payload on the sink that challenge is about.
 
 ### Result
 
-| Documented XSS challenge | Sink | Result |
+| Surface | What it is | Verdict |
 |---|---|---|
-| API-only XSS | `PUT /rest/products/1/reviews` | reproduced |
-| DOM XSS | `GET /#/search?q=` | reproduced |
-| Server-side XSS Protection | `POST /api/Feedbacks` | clean (expected) |
-| six others | — | not reached by this roster |
+| `home` | the SPA shell, no sink of its own | clean |
+| `search` | `localXssChallenge` — `#/search?q=` | reproduced, browser |
+| `reviews` | `restfulXssChallenge` — `PUT /rest/products/*/reviews` | lead only (see below) |
+| `feedback` | `persistedXssFeedbackChallenge` — `POST /api/Feedbacks` | clean |
+| `complaints` | a stored XSS the challenge list does not cover | reproduced, browser |
+| `last-login-ip` | `httpHeaderXssChallenge` — header → storage → `localStorage` | reproduced, browser |
+| `profile` | `persistedXssUserChallenge` — stored username | reproduced, browser; challenge itself needs one exact literal |
+| `login` | `POST /rest/user/login` | clean |
 
-Three real sinks were confirmed in total. The third, `POST /api/Complaints`, is
-a stored XSS that no documented challenge covers. `POST /api/Feedbacks` is
-reported clean because `sanitize-html` with its default allow-list stores the
-payload as text — the precision counterpart to the confirmations.
+Four sinks were confirmed in total, three of which the documented challenge list
+names. `POST /api/Complaints` is a real stored XSS that no challenge covers: the
+bench counts it as a surface, not as a challenge.
+
+The review surface is the one result that is a lead rather than a confirmation,
+and the replay is why it is not overstated: the write is echoed back by the API
+and stored, but the dialog that renders reviews in 20.3.0 binds the text as a
+plain property, so it reaches the DOM escaped. See below.
+
+`POST /api/Feedbacks` is reported clean because `sanitize-html` 1.4.2 with its
+default allow-list strips the tags the challenge needs — the precision
+counterpart to the confirmations, kept in the table above rather than dropped.
 
 `benchmark/juiceshop-report.md` is generated from `benchmark/juiceshop.json` by
 the harness, so the prose cannot drift from the run.
@@ -119,14 +154,15 @@ the harness, so the prose cannot drift from the run.
 
 | File | Content |
 |------|---------|
-| `bench/juice.py` | The harness: six surfaces, replay, challenge scoring, report |
+| `bench/juice.py` | The harness: surfaces, replay, challenge scoring, report |
+| `bench/reset-shop.ps1` | Drops the database so the next start rebuilds seed data |
 | `benchmark/juiceshop.json` | Machine-readable result, one object per surface |
 | `benchmark/juiceshop-report.md` | Generated report: challenges, surfaces, findings |
 
 Regenerate:
 
 ```bash
-python bench/juice.py            # all six surfaces, ~6 min with a browser
+python bench/juice.py            # all surfaces, ~8 min with a browser
 python bench/juice.py --list     # the roster and the documented challenges
 python bench/juice.py --only reviews
 python bench/juice.py --no-browser
@@ -134,6 +170,40 @@ python bench/juice.py --no-browser
 
 `bench/*.py` import `intellixss`, so run them from the repository root with
 `PYTHONPATH` set to it.
+
+### What the scanner cannot reach here, and why
+
+Two sinks are documented by Juice Shop but are not confirmed by a page scan.
+Neither is a scanner defect; both are properties of what the application renders.
+`restfulXssChallenge` stores a review through `PUT /rest/products/1/reviews`.
+The product dialog in 20.3.0 binds `review.message` as a plain property, so the
+text reaches the DOM escaped and never parses as markup. The challenge is still
+solvable because the *request* is the attack: posting the review over the API
+skips the dialog. A scanner that drives what the page renders — its own write
+target, its own form — finds the endpoint and the reflection, and stops there.
+Reaching it means posting a review the page does not post, which is a different
+tool.
+
+`usernameXssChallenge` is solved by the server recognising one exact string,
+`<script>alert(\`xss\`)</script>`, in the stored username. The profile template
+does run what is stored there, so the sink is confirmable with the scanner's own
+payload; the challenge is not the sink, it is the value. The bench counts the
+sink and says so, rather than claiming the challenge.
+
+One property of that page is worth recording, because it decides what a
+"confirmed" profile finding means. The rendered username lives in the `value`
+attribute of the input the form re-posts, and the Pug template puts a backslash
+in front of it. Reading the HTML back gives `\rc=x onerror=…` and suggests the
+tag never formed. Read the DOM instead — the browser's attribute parser has
+already resolved it — and the input holds the real markup. A `p` element that
+renders the same string as *text* then shows why it does not fire there. The
+bench confirms on the browser's view of the page and replays the write on the
+wire, never on a regular expression over the response.
+
+`#/privacy-security/last-login-ip` is the opposite case and is credited: the
+header reaches storage verbatim, the component decodes the session token out of
+`localStorage` and writes the value through `bypassSecurityTrustHtml`, and the
+scanner confirms its own marker there.
 
 ## Scope
 
