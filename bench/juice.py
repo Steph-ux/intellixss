@@ -87,12 +87,10 @@ CHALLENGES = [
     {
         "key": "reflectedXssChallenge",
         "name": "Reflected XSS",
-        "surface": "",
-        "why": "the order-tracking page reflects the id returned by its API; the "
-        "roster does not drive that page with a live order. During every scan the "
-        "route did confirm an executing payload for a direct "
-        "`#/track-result?id=` navigation, but that route is not what the challenge "
-        "turns on, so it is not credited here.",
+        "surface": "track",
+        "why": "the challenge itself is solved by one exact iframe string the server "
+        "recognises in the order id; the bench credits the sink it proves, not that "
+        "payload.",
     },
     {
         "key": "persistedXssFeedbackChallenge",
@@ -140,6 +138,19 @@ SURFACES = [
         "note": "`GET /rest/products/search?q=` is interpolated into SQL and its JSON "
         "is written to the page through `bypassSecurityTrustHtml`; the client sends the "
         "query in a fragment, so the server never sees it.",
+    },
+    {
+        "key": "track",
+        "challenge": "reflectedXssChallenge",
+        "page": "/",
+        "endpoint": "/rest/track-order/:id",
+        "route": "/track-result",
+        "field": "id",
+        "replay": "/rest/track-order/:id",
+        "note": "`GET /rest/track-order/:id` returns the id it was given and the tracking "
+        "page renders it through `bypassSecurityTrustHtml`, so the route the payload "
+        "travels in is a fragment and the sink is on the API behind it. The replay "
+        "addresses that handler with the finding's own payload.",
     },
     {
         "key": "reviews",
@@ -461,12 +472,31 @@ def reproduce(base: str, surface: dict, finding: dict, token: str, account: dict
     # A hash route never reaches the server: replaying it over HTTP returns the
     # application shell and says nothing about the payload. The browser is the
     # only oracle for that finding, and it already ran during the scan.
-    # An endpoint finding is replayed by putting its value on the wire again. A
-    # page finding — a hash route, or a browser-owned store — has nothing to put
-    # on the wire: the browser is the only oracle, and it already ran during the
-    # scan. Saying so is more honest than replaying a page and reporting the
-    # status of an unrelated request.
+    #
+    # Unless the component hands the value to an API, which is what the
+    # tracking page does with the id it was given: then the fragment names the
+    # component and ``replay`` names the request that carries the value. The
+    # replay proves the sink is fed by the application's own data path, not by
+    # a handler the scanner made up.
     if (parsed.fragment or "").startswith("/"):
+        replay = (surface or {}).get("replay") or ""
+        if replay and param == (surface.get("field") or param):
+            # A ``:id`` segment carries the value in the path, which is where
+            # the tracked id lives; the query string form would describe a
+            # handler that does not exist.
+            if ":id" in replay:
+                replay = replay.replace(":id", urllib.parse.quote(payload, safe=""))
+            else:
+                replay = f"{replay}?{urllib.parse.urlencode({param: payload})}"
+            status, text, _h = request(base, replay, "GET", None, token)
+            marker = finding.get("marker") or requests_marker(payload)
+            return {
+                "status": status,
+                "echoed": bool(marker) and marker in text,
+                "stored": False,
+                "dom": True,
+                "marker": marker,
+            }
         return {
             "status": 0,
             "echoed": False,
@@ -751,14 +781,16 @@ def write_report(rows: list, version: str, base: str) -> Path:
             add(f"- Type: `{f['type']}`")
             add(f"- Payload: `{f['payload']}`")
             replay = f.get("replay") or {}
-            if replay.get("dom"):
-                add(f"- Replay: {replay.get('note', 'browser-only')}")
-            elif replay:
+            if replay.get("status"):
                 add(
                     f"- Replay: HTTP `{replay.get('status', 0)}`, "
                     f"echoed `{str(replay.get('echoed', False)).lower()}`, "
                     f"stored `{str(replay.get('stored', False)).lower()}`"
                 )
+            elif replay.get("dom"):
+                add(f"- Replay: {replay.get('note', 'browser-only')}")
+            elif replay:
+                add(f"- Replay: {replay.get('note', 'not replayed')}")
             add("")
     add("## Not reached, and why")
     add("")

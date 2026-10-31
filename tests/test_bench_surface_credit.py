@@ -134,3 +134,21 @@ def test_an_api_surface_is_still_posted_as_json():
     assert seen, "nothing was sent"
     assert seen[0]["form"] is False
     assert seen[0]["cookie"] == ""
+
+
+def test_the_tracking_route_is_its_own_surface():
+    """The route a payload travels in is graded on the field it renders."""
+    track = surface("track")
+    assert bench._on_sink(track, finding("id", f"{BASE}/#/track-result?id=x", method="GET"))
+    # ``q`` on the search box is a different component, and ``id`` anywhere
+    # else is a different route or a different sink.
+    assert not bench._on_sink(track, finding("q", f"{BASE}/#/search?q=x", method="GET"))
+    assert not bench._on_sink(track, finding("id", f"{BASE}/?id=x", method="GET"))
+
+
+def test_a_hash_route_without_a_replay_shape_stays_browser_only():
+    finding_ = finding("id", f"{BASE}/#/track-result?id=x", payload="<img src=x onerror=alert(`ixm00000000`)>", method="GET")
+    out = bench.reproduce(BASE, {"key": "track", "field": "id"}, finding_, "")
+    assert out["dom"] is True
+    assert out["status"] == 0
+    assert "browser-only" in out["note"]
