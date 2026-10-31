@@ -131,18 +131,36 @@ executing payload on the sink that challenge is about.
 | `reviews` | `restfulXssChallenge` — `PUT /rest/products/*/reviews` | lead only (see below) |
 | `feedback` | `persistedXssFeedbackChallenge` — `POST /api/Feedbacks` | clean |
 | `complaints` | a stored XSS the challenge list does not cover | reproduced, browser |
-| `last-login-ip` | `httpHeaderXssChallenge` — header → storage → `localStorage` | reproduced, browser |
+| `last-login-ip` | `httpHeaderXssChallenge` — header → storage → `localStorage` | lead only (see below) |
 | `profile` | `persistedXssUserChallenge` — stored username | reproduced, browser; challenge itself needs one exact literal |
 | `login` | `POST /rest/user/login` | clean |
 
-Five sinks were confirmed in total, four of which the documented challenge list
-names. `POST /api/Complaints` is a real stored XSS that no challenge covers: the
-bench counts it as a surface, not as a challenge.
+Four sinks were confirmed in the browser, three of which the documented
+challenge list names. `POST /api/Complaints` is a real stored XSS that no
+challenge covers: the bench counts it as a surface, not as a challenge.
 
-The review surface is the one result that is a lead rather than a confirmation,
-and the replay is why it is not overstated: the write is echoed back by the API
-and stored, but the dialog that renders reviews in 20.3.0 binds the text as a
-plain property, so it reaches the DOM escaped. See below.
+Two results are leads rather than confirmations, and both are reported as
+leads because the replay could not prove execution on the wire.
+
+The review surface is one of them. The write is stored and echoed back by the
+API, but the dialog that renders reviews in 20.3.0 binds the text as a plain
+property: a payload written to `PUT /rest/products/1/reviews` comes back
+escaped and no dialog fires. That was verified by hand as well as by the scan
+(admin bearer, `201`, the record in `GET`, the dialog showing `&lt;img …&gt;`),
+so the endpoint is recorded as a reflection sink and not as an XSS, and the
+`reviews` surface requires a session (`auth: True`) like the other write
+targets.
+
+The `last-login-ip` surface is the other. Its sink is real — the route decodes
+the token out of `localStorage` and writes its `lastLoginIp` through
+`bypassSecurityTrustHtml` — and the built-in confirmation of it passed in an
+earlier run. In this run the sink was reached as a reflection only. The
+reason is the per-host browser budget: the eight client-route probes spend the
+twelve navigations a host is allowed before the page stages that drive a
+seeded source run, so the `localStorage` seed never got a confirmation slot.
+The budget lines in the scan log (`browser budget <host>: route=8`) show
+where the slots went. This is a scanner limitation, recorded here rather than
+hidden by raising the cap for the bench.
 
 `POST /api/Feedbacks` is reported clean because `sanitize-html` 1.4.2 with its
 default allow-list strips the tags the challenge needs — the precision

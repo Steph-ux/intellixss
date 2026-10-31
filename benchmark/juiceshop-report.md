@@ -20,7 +20,7 @@ while sending its own payload, which is what a scan is for.
 | CSP Bypass | `usernameXssChallenge` | `POST /profile` | not counted; the sink is proven by `profile` in this run, and what keeps the challenge is its own exact value |
 | Client-side XSS Protection | `persistedXssUserChallenge` | `POST /profile` | reproduced; challenge itself needs the literal `<iframe src="javascript:alert(`xss`)">` |
 | DOM XSS | `localXssChallenge` | `GET /#/search?q=` | reproduced |
-| HTTP-Header XSS | `httpHeaderXssChallenge` | `GET /#/privacy-security/last-login-ip` via `localStorage` | reproduced |
+| HTTP-Header XSS | `httpHeaderXssChallenge` | `GET /rest/saveLoginIp` | lead only |
 | Reflected XSS | `reflectedXssChallenge` | `GET /#/track-result?id=` | reproduced |
 | Server-side XSS Protection | `persistedXssFeedbackChallenge` | `POST /api/Feedbacks` | clean |
 | Video XSS | `videoXssChallenge` | admin-only promo video URL | not reached |
@@ -32,7 +32,7 @@ own `<img onerror>` payload, while the challenge is solved by the server
 seeing one exact injected value. The same holds for the search surface
 and the bonus payload.
 
-4 of 9 documented XSS challenges reproduced automatically.
+3 of 9 documented XSS challenges reproduced automatically.
 1 documented challenge reported clean, and 4 met the roster's bar for a challenge (see below). Each of those names the sink it is about, so a row marked "not reached" is a statement about that sink, not about the roster.
 
 A clean result is the expected answer for `persistedXssFeedbackChallenge`: the sink is behind
@@ -69,15 +69,15 @@ about a header, that header. No payload is pre-written by the harness.
 
 | Surface | Pointed at | Sink | Verdict | Confirmed | Requests | Time |
 |---|---|---|---|---|---|---|
-| home | `/` | `GET /` | clean | 0 | 69 | 74.4s |
-| search | `/` | `GET /#/search?q=` | reproduced | 1 | 69 | 75.3s |
-| track | `/` | `GET /#/track-result?id=` | reproduced | 1 | 69 | 74.3s |
-| reviews | `/` | `PUT /rest/products/1/reviews` | lead only | 0 | 69 | 74.7s |
-| feedback | `/` | `POST /api/Feedbacks` | clean | 0 | 69 | 74.1s |
-| complaints | `/` | `POST /api/Complaints` | reproduced | 1 | 69 | 71.0s |
-| last-login-ip | `/#/privacy-security/last-login-ip` | `GET /#/privacy-security/last-login-ip` via `localStorage` | reproduced | 1 | 69 | 64.1s |
-| profile | `/profile` | `POST /profile` | reproduced | 1 | 10 | 14.6s |
-| login | `/` | `POST /rest/user/login` | clean | 0 | 69 | 67.6s |
+| home | `/` | `GET /` | clean | 0 | 73 | 87.8s |
+| search | `/` | `GET /#/search?q=` | reproduced | 1 | 73 | 82.4s |
+| track | `/` | `GET /#/track-result?id=` | reproduced | 1 | 73 | 83.7s |
+| reviews | `/` | `PUT /rest/products/1/reviews` | lead only | 0 | 73 | 79.8s |
+| feedback | `/` | `POST /api/Feedbacks` | clean | 0 | 73 | 80.2s |
+| complaints | `/` | `POST /api/Complaints` | reproduced | 1 | 73 | 82.0s |
+| last-login-ip | `/#/privacy-security/last-login-ip` | `GET /rest/saveLoginIp` | lead only | 0 | 73 | 82.5s |
+| profile | `/profile` | `POST /profile` | reproduced | 1 | 19 | 20.2s |
+| login | `/` | `POST /rest/user/login` | clean | 0 | 73 | 88.8s |
 
 ## Confirmed findings
 
@@ -102,23 +102,15 @@ about a header, that header. No payload is pre-written by the harness.
 - Parameter: `message`
 - Context: `html_text`
 - Type: `stored`
-- Payload: `<img src=x onerror=alert('ixm84a9dfef')>`
+- Payload: `<img src=x onerror=alert('ixm6d17c22f')>`
 - Replay: HTTP `201`, echoed `true`, stored `true`
-
-### `GET http://127.0.0.1:3000/#/privacy-security/last-login-ip`
-
-- Parameter: `localStorage`
-- Context: `url_fragment`
-- Type: `dom`
-- Payload: `<img src=x onerror=alert('ixm80182528')>`
-- Replay: hash route: execution is browser-only
 
 ### `POST http://127.0.0.1:3000/profile`
 
 - Parameter: `username`
 - Context: `html_text`
 - Type: `stored`
-- Payload: `<img src=x onerror=alert('ixmd1c4eda3')>`
+- Payload: `<img src=x onerror=alert('ixm63ea2969')>`
 - Replay: HTTP `200`, echoed `true`, stored `true`
 
 ## Not reached by the roster, and why

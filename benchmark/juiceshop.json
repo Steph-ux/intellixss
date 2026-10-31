@@ -3,9 +3,9 @@
     "key": "home",
     "status": "ok",
     "findings": [],
-    "requests": 69,
+    "requests": 73,
     "targets": 38,
-    "secs": 74.4,
+    "secs": 87.8,
     "session": "shared",
     "surface": {
       "key": "home",
@@ -38,9 +38,9 @@
         }
       }
     ],
-    "requests": 69,
+    "requests": 73,
     "targets": 38,
-    "secs": 75.3,
+    "secs": 82.4,
     "session": "shared",
     "surface": {
       "key": "search",
@@ -74,9 +74,9 @@
         }
       }
     ],
-    "requests": 69,
+    "requests": 73,
     "targets": 38,
-    "secs": 74.3,
+    "secs": 83.7,
     "session": "shared",
     "surface": {
       "key": "track",
@@ -97,22 +97,22 @@
         "param": "message",
         "ctx": "html_text",
         "verified_by": "reflection",
-        "payload": "<img src=x onerror=alert('ixm7731e8ba')>",
+        "payload": "<img src=x onerror=alert('ixm78295181')>",
         "type": "stored",
         "method": "PUT",
         "url": "http://127.0.0.1:3000/rest/products/1/reviews",
-        "marker": "ixm7731e8ba",
+        "marker": "ixm78295181",
         "replay": {
           "status": 201,
           "echoed": false,
           "stored": true,
-          "marker": "ixm7731e8ba"
+          "marker": "ixm78295181"
         }
       }
     ],
-    "requests": 69,
+    "requests": 73,
     "targets": 38,
-    "secs": 74.7,
+    "secs": 79.8,
     "session": "shared",
     "surface": {
       "key": "reviews",
@@ -121,16 +121,17 @@
       "endpoint": "/rest/products/1/reviews",
       "field": "message",
       "method": "PUT",
-      "note": "`PUT /rest/products/1/reviews` stores `message` verbatim, with no authentication; the Angular template writes it into the product dialog, which 20.3.0 opens from the `#/search` grid rather than a route of its own."
+      "auth": true,
+      "note": "`PUT /rest/products/1/reviews` stores `message` verbatim behind a session; the Angular template writes it into the product dialog, which 20.3.0 opens from the `#/search` grid rather than a route of its own."
     }
   },
   {
     "key": "feedback",
     "status": "ok",
     "findings": [],
-    "requests": 69,
+    "requests": 73,
     "targets": 38,
-    "secs": 74.1,
+    "secs": 80.2,
     "session": "shared",
     "surface": {
       "key": "feedback",
@@ -150,22 +151,22 @@
         "param": "message",
         "ctx": "html_text",
         "verified_by": "browser",
-        "payload": "<img src=x onerror=alert('ixm84a9dfef')>",
+        "payload": "<img src=x onerror=alert('ixm6d17c22f')>",
         "type": "stored",
         "method": "POST",
         "url": "http://127.0.0.1:3000/api/Complaints",
-        "marker": "ixm84a9dfef",
+        "marker": "ixm6d17c22f",
         "replay": {
           "status": 201,
           "echoed": true,
           "stored": true,
-          "marker": "ixm84a9dfef"
+          "marker": "ixm6d17c22f"
         }
       }
     ],
-    "requests": 69,
+    "requests": 73,
     "targets": 38,
-    "secs": 71.0,
+    "secs": 82.0,
     "session": "shared",
     "surface": {
       "key": "complaints",
@@ -184,25 +185,25 @@
       {
         "param": "localStorage",
         "ctx": "url_fragment",
-        "verified_by": "browser",
-        "payload": "<img src=x onerror=alert('ixm80182528')>",
+        "verified_by": "reflection",
+        "payload": "<img src=x onerror=alert('ixm29465184')>",
         "type": "dom",
         "method": "GET",
         "url": "http://127.0.0.1:3000/#/privacy-security/last-login-ip",
-        "marker": "ixm80182528",
+        "marker": "ixm29465184",
         "replay": {
           "status": 0,
           "echoed": false,
           "stored": false,
           "dom": true,
-          "marker": "ixm80182528",
+          "marker": "ixm29465184",
           "note": "hash route: execution is browser-only"
         }
       }
     ],
-    "requests": 69,
+    "requests": 73,
     "targets": 38,
-    "secs": 64.1,
+    "secs": 82.5,
     "session": "account",
     "surface": {
       "key": "last-login-ip",
@@ -227,22 +228,22 @@
         "param": "username",
         "ctx": "html_text",
         "verified_by": "browser",
-        "payload": "<img src=x onerror=alert('ixmd1c4eda3')>",
+        "payload": "<img src=x onerror=alert('ixm63ea2969')>",
         "type": "stored",
         "method": "POST",
         "url": "http://127.0.0.1:3000/profile",
-        "marker": "ixmd1c4eda3",
+        "marker": "ixm63ea2969",
         "replay": {
           "status": 200,
           "echoed": true,
           "stored": true,
-          "marker": "ixmd1c4eda3"
+          "marker": "ixm63ea2969"
         }
       }
     ],
-    "requests": 10,
+    "requests": 19,
     "targets": 8,
-    "secs": 14.6,
+    "secs": 20.2,
     "session": "account",
     "surface": {
       "key": "profile",
@@ -259,9 +260,9 @@
     "key": "login",
     "status": "ok",
     "findings": [],
-    "requests": 69,
+    "requests": 73,
     "targets": 38,
-    "secs": 67.6,
+    "secs": 88.8,
     "session": "shared",
     "surface": {
       "key": "login",
