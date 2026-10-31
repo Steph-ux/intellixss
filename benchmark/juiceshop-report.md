@@ -17,9 +17,9 @@ while sending its own payload, which is what a scan is for.
 | Challenge | Key | Sink | Result |
 |---|---|---|---|
 | API-only XSS | `restfulXssChallenge` | `PUT /rest/products/1/reviews` | not reached |
-| CSP Bypass | `usernameXssChallenge` | `POST /profile` | not counted; the sink is proven by `profile` in this run, and what keeps the challenge is its own exact value |
-| Client-side XSS Protection | `persistedXssUserChallenge` | `POST /profile` | reproduced; challenge itself needs the literal `<iframe src="javascript:alert(`xss`)">` |
-| DOM XSS | `localXssChallenge` | `GET /#/search?q=` | reproduced |
+| CSP Bypass | `usernameXssChallenge` | `POST /profile` | not reached |
+| Client-side XSS Protection | `persistedXssUserChallenge` | `POST /profile` | clean |
+| DOM XSS | `localXssChallenge` | `GET /rest/products/search` | confirmed, no wire proof |
 | HTTP-Header XSS | `httpHeaderXssChallenge` | `GET /rest/saveLoginIp` | lead only |
 | Reflected XSS | `reflectedXssChallenge` | `GET /#/track-result?id=` | reproduced |
 | Server-side XSS Protection | `persistedXssFeedbackChallenge` | `POST /api/Feedbacks` | clean |
@@ -32,10 +32,10 @@ own `<img onerror>` payload, while the challenge is solved by the server
 seeing one exact injected value. The same holds for the search surface
 and the bonus payload.
 
-3 of 9 documented XSS challenges reproduced automatically.
-1 documented challenge reported clean, and 4 met the roster's bar for a challenge (see below). Each of those names the sink it is about, so a row marked "not reached" is a statement about that sink, not about the roster.
+1 of 9 documented XSS challenges reproduced automatically.
+2 documented challenges reported clean, and 4 met the roster's bar for a challenge (see below). Each of those names the sink it is about, so a row marked "not reached" is a statement about that sink, not about the roster.
 
-A clean result is the expected answer for `persistedXssFeedbackChallenge`: the sink is behind
+A clean result is the expected answer for `persistedXssUserChallenge`, `persistedXssFeedbackChallenge`: the sink is behind
 `sanitize-html` with its default allow-list, so the payload is stored as
 text and cannot execute. Reporting it clean is the precision counterpart
 to the confirmations.
@@ -69,15 +69,15 @@ about a header, that header. No payload is pre-written by the harness.
 
 | Surface | Pointed at | Sink | Verdict | Confirmed | Requests | Time |
 |---|---|---|---|---|---|---|
-| home | `/` | `GET /` | clean | 0 | 73 | 87.8s |
-| search | `/` | `GET /#/search?q=` | reproduced | 1 | 73 | 82.4s |
-| track | `/` | `GET /#/track-result?id=` | reproduced | 1 | 73 | 83.7s |
-| reviews | `/` | `PUT /rest/products/1/reviews` | lead only | 0 | 73 | 79.8s |
-| feedback | `/` | `POST /api/Feedbacks` | clean | 0 | 73 | 80.2s |
-| complaints | `/` | `POST /api/Complaints` | reproduced | 1 | 73 | 82.0s |
-| last-login-ip | `/#/privacy-security/last-login-ip` | `GET /rest/saveLoginIp` | lead only | 0 | 73 | 82.5s |
-| profile | `/profile` | `POST /profile` | reproduced | 1 | 19 | 20.2s |
-| login | `/` | `POST /rest/user/login` | clean | 0 | 73 | 88.8s |
+| home | `/` | `GET /` | clean | 0 | 73 | 95.2s |
+| search | `/` | `GET /rest/products/search` | confirmed, no wire proof | 0 | 73 | 105.0s |
+| track | `/` | `GET /#/track-result?id=` | reproduced | 1 | 73 | 92.8s |
+| reviews | `/` | `PUT /rest/products/1/reviews` | lead only | 0 | 73 | 98.0s |
+| feedback | `/` | `POST /api/Feedbacks` | clean | 0 | 73 | 88.6s |
+| complaints | `/` | `POST /api/Complaints` | reproduced | 1 | 73 | 91.3s |
+| last-login-ip | `/#/privacy-security/last-login-ip` | `GET /rest/saveLoginIp` | lead only | 0 | 73 | 92.1s |
+| profile | `/profile` | `POST /profile` | clean | 0 | 42 | 25.2s |
+| login | `/` | `POST /rest/user/login` | clean | 0 | 73 | 88.4s |
 
 ## Confirmed findings
 
@@ -87,7 +87,7 @@ about a header, that header. No payload is pre-written by the harness.
 - Context: `html_text`
 - Type: `dom`
 - Payload: `<img src=x onerror=alert(`ixm03bac14b`)>`
-- Replay: hash route: execution is browser-only
+- Replay: refused, `no wire request is known for route /search?q=%3Cimg+src%3Dx+onerror%3Dalert%28%60ixm03bac14b%60%29%3E`
 
 ### `GET http://127.0.0.1:3000/#/track-result?id=%3Cimg+src%3Dx+onerror%3Dalert%28%60ixm866b973f%60%29%3E`
 
@@ -102,16 +102,13 @@ about a header, that header. No payload is pre-written by the harness.
 - Parameter: `message`
 - Context: `html_text`
 - Type: `stored`
-- Payload: `<img src=x onerror=alert('ixm6d17c22f')>`
+- Payload: `<img src=x onerror=alert('ixmf612359c')>`
 - Replay: HTTP `201`, echoed `true`, stored `true`
 
-### `POST http://127.0.0.1:3000/profile`
+## Stored records that do not execute
 
-- Parameter: `username`
-- Context: `html_text`
-- Type: `stored`
-- Payload: `<img src=x onerror=alert('ixm63ea2969')>`
-- Replay: HTTP `200`, echoed `true`, stored `true`
+A record the page keeps and renders as text: the value is stored and comes back, and the page gives nothing in it a chance to run. It is replayed the same way a confirmed finding is, so the row says whether the wire agrees — a record the replay cannot reproduce was not one.
+
 
 ## Not reached by the roster, and why
 

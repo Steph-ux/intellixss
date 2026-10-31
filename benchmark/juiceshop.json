@@ -5,7 +5,7 @@
     "findings": [],
     "requests": 73,
     "targets": 38,
-    "secs": 87.8,
+    "secs": 95.2,
     "session": "shared",
     "surface": {
       "key": "home",
@@ -32,15 +32,14 @@
           "status": 0,
           "echoed": false,
           "stored": false,
-          "dom": true,
-          "marker": "ixm03bac14b",
-          "note": "hash route: execution is browser-only"
+          "replayed": false,
+          "note": "no wire request is known for route /search?q=%3Cimg+src%3Dx+onerror%3Dalert%28%60ixm03bac14b%60%29%3E"
         }
       }
     ],
     "requests": 73,
     "targets": 38,
-    "secs": 82.4,
+    "secs": 105.0,
     "session": "shared",
     "surface": {
       "key": "search",
@@ -76,7 +75,7 @@
     ],
     "requests": 73,
     "targets": 38,
-    "secs": 83.7,
+    "secs": 92.8,
     "session": "shared",
     "surface": {
       "key": "track",
@@ -97,22 +96,16 @@
         "param": "message",
         "ctx": "html_text",
         "verified_by": "reflection",
-        "payload": "<img src=x onerror=alert('ixm78295181')>",
+        "payload": "<img src=x onerror=alert('ixm1c12bba1')>",
         "type": "stored",
         "method": "PUT",
         "url": "http://127.0.0.1:3000/rest/products/1/reviews",
-        "marker": "ixm78295181",
-        "replay": {
-          "status": 201,
-          "echoed": false,
-          "stored": true,
-          "marker": "ixm78295181"
-        }
+        "marker": "ixm1c12bba1"
       }
     ],
     "requests": 73,
     "targets": 38,
-    "secs": 79.8,
+    "secs": 98.0,
     "session": "shared",
     "surface": {
       "key": "reviews",
@@ -131,7 +124,7 @@
     "findings": [],
     "requests": 73,
     "targets": 38,
-    "secs": 80.2,
+    "secs": 88.6,
     "session": "shared",
     "surface": {
       "key": "feedback",
@@ -151,22 +144,22 @@
         "param": "message",
         "ctx": "html_text",
         "verified_by": "browser",
-        "payload": "<img src=x onerror=alert('ixm6d17c22f')>",
+        "payload": "<img src=x onerror=alert('ixmf612359c')>",
         "type": "stored",
         "method": "POST",
         "url": "http://127.0.0.1:3000/api/Complaints",
-        "marker": "ixm6d17c22f",
+        "marker": "ixmf612359c",
         "replay": {
           "status": 201,
           "echoed": true,
           "stored": true,
-          "marker": "ixm6d17c22f"
+          "marker": "ixmf612359c"
         }
       }
     ],
     "requests": 73,
     "targets": 38,
-    "secs": 82.0,
+    "secs": 91.3,
     "session": "shared",
     "surface": {
       "key": "complaints",
@@ -186,24 +179,16 @@
         "param": "localStorage",
         "ctx": "url_fragment",
         "verified_by": "reflection",
-        "payload": "<img src=x onerror=alert('ixm29465184')>",
+        "payload": "alert('ixm80736912')",
         "type": "dom",
         "method": "GET",
         "url": "http://127.0.0.1:3000/#/privacy-security/last-login-ip",
-        "marker": "ixm29465184",
-        "replay": {
-          "status": 0,
-          "echoed": false,
-          "stored": false,
-          "dom": true,
-          "marker": "ixm29465184",
-          "note": "hash route: execution is browser-only"
-        }
+        "marker": "ixm80736912"
       }
     ],
     "requests": 73,
     "targets": 38,
-    "secs": 82.5,
+    "secs": 92.1,
     "session": "account",
     "surface": {
       "key": "last-login-ip",
@@ -223,27 +208,10 @@
   {
     "key": "profile",
     "status": "ok",
-    "findings": [
-      {
-        "param": "username",
-        "ctx": "html_text",
-        "verified_by": "browser",
-        "payload": "<img src=x onerror=alert('ixm63ea2969')>",
-        "type": "stored",
-        "method": "POST",
-        "url": "http://127.0.0.1:3000/profile",
-        "marker": "ixm63ea2969",
-        "replay": {
-          "status": 200,
-          "echoed": true,
-          "stored": true,
-          "marker": "ixm63ea2969"
-        }
-      }
-    ],
-    "requests": 19,
+    "findings": [],
+    "requests": 42,
     "targets": 8,
-    "secs": 20.2,
+    "secs": 25.2,
     "session": "account",
     "surface": {
       "key": "profile",
@@ -262,7 +230,7 @@
     "findings": [],
     "requests": 73,
     "targets": 38,
-    "secs": 88.8,
+    "secs": 88.4,
     "session": "shared",
     "surface": {
       "key": "login",
