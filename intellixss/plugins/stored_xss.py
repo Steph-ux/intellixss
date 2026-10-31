@@ -465,6 +465,7 @@ async def scan_server_stored(
             if p not in payloads:
                 payloads.append(p)
     payloads = payloads[:max(max_payloads, 4) * max(1, len(sinks))]
+    stored_proof = ""
     for payload in payloads:
         data[field] = payload
         st2, body2, _, fin2 = await _send(payload)
@@ -535,6 +536,20 @@ async def scan_server_stored(
                     confidence=0.85,
                 )
             finding.marker = marker
+            # Storage is proven by writing a value that executes nothing and
+            # reading it back with no payload in the request. It is proven once
+            # per endpoint and field, before the payloads: a handler that
+            # answers ``status: success`` without keeping the record would
+            # otherwise be credited with the sink behind it on every payload,
+            # and re-writing to check would overwrite the record under test.
+            if not stored_proof:
+                stored_proof = await _prove_persistence(client, ru, field, method, data)
+            if not stored_proof:
+                log(
+                    f"stored: {ru[:60]} answered but does not keep the value",
+                    "debug",
+                )
+                continue
             finding.verified_by = "reflection"
 
             if (
@@ -558,12 +573,17 @@ async def scan_server_stored(
                 # backstop, and it is what keeps a stuck page from freezing the
                 # whole scan.
                 try:
+                    # The record was written and read back, so this navigation is
+                    # evidence and not a guess: ``confirm`` charges it as such,
+                    # and a host with no slot left refuses it with the same
+                    # ``confirm_budget_exhausted`` the report already knows.
                     br = await asyncio.wait_for(
                         browser.confirm(
                             render_page,
                             context_hint=ctx_kind.value,
                             payload=payload,
                             marker=marker,
+                            kind="stored",
                         ),
                         timeout=_STORE_PROBE_SECONDS + 15,
                     )
@@ -578,7 +598,10 @@ async def scan_server_stored(
                         # that write, which is what makes the payload run.
                         br = await asyncio.wait_for(
                             browser.confirm_markup(
-                                render_page, markup=payload, marker=marker
+                                render_page,
+                                markup=payload,
+                                marker=marker,
+                                kind="stored",
                             ),
                             timeout=_STORE_PROBE_SECONDS + 15,
                         )
@@ -605,6 +628,63 @@ async def scan_server_stored(
             )
             return findings
     return findings
+
+
+_PROOF_PREFIX = "ixproof"
+
+
+def _strip_query(url: str) -> str:
+    """*url* without its query string, which is where a read-back echo hides."""
+    parts = urlparse(url)
+    return parts._replace(query="", fragment="").geturl()
+
+
+async def _prove_persistence(
+    client: HttpClient, url: str, field: str, method: str, data: dict
+) -> Optional[str]:
+    """Re-read a stored value with no payload involved, so it proves storage.
+
+    ``PUT /rest/products/:id/reviews`` answers ``201`` and stores nothing; the
+    record a victim's page renders comes from somewhere else. A write whose
+    verdict is not the record itself is therefore read back twice with a
+    payload-shaped value that executes nothing, and only a value that is still
+    there the second time counts as a record this endpoint owns. Without it the
+    sink behind the handler is credited to a route that never stores.
+    """
+    uid = hashlib.md5(f"proof{field}{time.time()}".encode()).hexdigest()[:8]
+    canary = f"{_PROOF_PREFIX}{uid}"
+    saved = data.get(field)
+    try:
+        data[field] = canary
+        st, _body, _h, _fin = await _submit(
+            client, url, field, canary, method, data, wrap="", json_body=True
+        )
+        if not st or st >= 400:
+            return None
+        for _ in range(2):
+            r_st, r_body, _rh = await _render_one(client, url)
+            if not r_st or not r_body or canary not in r_body:
+                return None
+        # A listing that merely reflects what was sent shows the value in the
+        # query string of the next read, before any record exists. Reading the
+        # clean URL is what tells the two apart. A page that answers the clean
+        # URL *and* still carries the value is showing its record — that is
+        # proof, whatever else is true. A page that answers the clean URL with
+        # nothing is not the record's page, so the query read is all there is,
+        # and the two identical reads above are the evidence. A handle that
+        # cannot read a clean URL at all falls back to those two reads as well.
+        clean = _strip_query(url)
+        if clean == url:
+            return canary
+        clean_st, clean_body, _ch = await _render_one(client, clean)
+        if clean_st and clean_body:
+            return canary if canary in clean_body else None
+        return canary
+    finally:
+        if saved is None:
+            data.pop(field, None)
+        else:
+            data[field] = saved
 
 
 async def _render(client: HttpClient, urls: List[str]):

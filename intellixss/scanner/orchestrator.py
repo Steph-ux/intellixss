@@ -23,7 +23,7 @@ import json
 import re
 import secrets
 import time
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 from urllib.parse import parse_qsl, quote, urlencode, urljoin, urlparse, urlunparse
 from colorama import Fore, Style, init as colorama_init
 
@@ -141,6 +141,30 @@ _CONFIRM_DEADLINE = 45.0
 # must still happen, so a speculative probe stops before touching the reserve.
 _CLIENT_ROUTE_RESERVE = 4
 
+# Times one route key may be probed in the browser before the scan leaves it
+# alone. Each probe costs a navigation on a host whose whole budget is twelve,
+# and the bundle can name eight routes: a dead route asked once is a fair guess,
+# asked eight times it is what leaves the sink behind them with nothing. A
+# proven route still gets its confirmation through the reflected pass; this only
+# bounds the guess.
+_ROUTE_ATTEMPT_ALLOWANCE = 1
+
+
+
+def _probe_reserve(browser, url: str) -> int:
+    """Navigations a route probe must leave untouched on *url*'s host.
+
+    The probe is a guess; the confirmations that follow are evidence. Keeping a
+    fixed number of slots for the evidence is only sane while the host has more
+    than that to begin with, so the floor is taken as the smaller of the
+    configured reserve and half of what is left. Reserving everything would let
+    the guesses spend the budget the reserve was meant to save.
+    """
+    left = browser.budget_left(url)
+    if left <= 0:
+        return 0
+    return max(1, min(_CLIENT_ROUTE_RESERVE, left // 2))
+
 
 def route_probe_payload(marker: str) -> str:
     """The payload a client route is probed with.
@@ -205,6 +229,10 @@ class Scanner:
         self._allowlist_handler: str = ""
         self._source_dom_done: set = set()
         self._seen_keys: set = set()
+        # How many times each route key was probed in the browser, keyed by
+        # (host, parameter). A navigation is spent per attempt, not per key, so
+        # the count is what bounds the guesses on a small budget.
+        self._route_attempts: Dict[Tuple[str, str], int] = {}
         self._mute = False
 
     # ------------------------------------------------------------------
@@ -300,6 +328,17 @@ class Scanner:
 
                 await asyncio.gather(*[_one(t) for t in targets])
 
+                # The stored pass comes before the page stages, not after. A
+                # sink it finds has already been written and read back on the
+                # wire, and the browser is only asked to execute what is
+                # known to be there. The page stages that follow are guesses
+                # about sources a URL cannot drive — a route the bundle
+                # suggests, a value read from ``localStorage`` — and on a small
+                # per-host budget a handful of them is enough to leave the
+                # proven sink with nothing. Evidence goes first; the guesses
+                # take what is left, inside the reserve.
+                await self._stored_pass(client, target_url, targets, result, lock)
+
                 # Sources the URL cannot drive are invisible to the ladder, so
                 # the page is analysed directly for them. The document itself is
                 # the unit: a sink reading ``localStorage`` or ``window.name``
@@ -315,7 +354,6 @@ class Scanner:
                     )
                     await self._scan_source_dom(client, page_target, result, lock)
 
-                await self._stored_pass(client, target_url, targets, result, lock)
                 if self.config.deep:
                     await self._deep_pass(client, target_url, body, result, lock)
 
@@ -330,6 +368,13 @@ class Scanner:
             result.stats.finished_at = time.monotonic()
 
         confirmed = sum(1 for f in result.findings if f.browser_confirmed)
+        if getattr(self.browser, "_spent", None):
+            # A host that ran out of navigations is a fact about the run, not a
+            # detail: it says which confirmations did not happen. Naming the
+            # stages that took the slots is what makes the number actionable.
+            for host, spent in self.browser._spent.items():
+                parts = ", ".join(f"{k}={v}" for k, v in sorted(spent.items()))
+                self._log(f"browser budget {host}: {parts}", "info")
         self._log(
             f"done — findings={len(result.findings)} "
             f"confirmed={confirmed}/{len(result.findings)} "
@@ -778,12 +823,41 @@ class Scanner:
             self._log(f"dom    {param}: client route needs a browser", "debug")
             return
         # A client route is a guess about where the sink is: the bundle proves
-        # the router reads the key, not that the value reaches markup. A stored
-        # sink is the opposite — the payload was written and read back, and the
-        # browser is only being asked to execute what is already known to be
-        # there. The last navigations on a host are therefore reserved for
-        # those, and a speculative route probe stops before spending them.
-        if self.browser.budget_left(target.url) <= _CLIENT_ROUTE_RESERVE:
+        # the router reads the key, not that the value reaches markup, and most
+        # guesses never fire. A stored sink is the opposite — the payload was
+        # written and read back, and the browser is only being asked to execute
+        # what is already known to be there. A route probe is therefore always
+        # speculative: it asks before it builds anything, and it stops at the
+        # reserve, which is what keeps the last navigations of the host for a
+        # sink the wire already proved. The navigation itself is charged once,
+        # by ``confirm``.
+        # Routes are answered one after another on the host, and a run of
+        # routes with nothing to show spends the budget a later route needed.
+        # The budget is small enough to have no room for that, so a probe stops
+        # once its own key has been tried ``_ROUTE_ATTEMPT_ALLOWANCE`` times
+        # without a browser confirmation naming our marker. Every confirmation
+        # costs a navigation whether it fires or not, and an error route reports
+        # its key whether or not the value lands in markup: counting by key is
+        # what keeps the same dead route from being asked eight times.
+        host = urlparse(target.url).netloc
+        key = (host, param)
+        attempts = self._route_attempts.get(key, 0)
+        if attempts >= _ROUTE_ATTEMPT_ALLOWANCE:
+            self._log(
+                f"dom    {param}: already probed without a confirmation",
+                "debug",
+            )
+            return
+        self._route_attempts[key] = attempts + 1
+        # A speculation may never spend every slot of the host. The reserve is
+        # half the remaining budget rather than a fixed number: a fixed floor on
+        # a generous host is the whole budget, which leaves nothing for the sink
+        # the reserve existed for, while on a small host half still leaves room
+        # for the route that actually fires.
+        reserve = _probe_reserve(self.browser, target.url)
+        if not self.browser.can_spend(
+            target.url, speculative=True, reserve=reserve
+        ):
             self._log(
                 f"dom    {param}: confirmation budget reserved for stored sinks",
                 "debug",
@@ -809,6 +883,8 @@ class Scanner:
                     context_hint=InjectionContext.HTML_TEXT.value,
                     payload=payload,
                     marker=marker,
+                    speculative=True,
+                    reserve=reserve,
                 ),
                 timeout=_CONFIRM_DEADLINE,
             )
@@ -1893,6 +1969,7 @@ class Scanner:
                         context_hint=ctx.context.value,
                         payload=payload,
                         marker=marker,
+                        kind="source" if finding.seeds else "reflected",
                         **seeds,
                     ),
                     timeout=_CONFIRM_DEADLINE,

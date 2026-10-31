@@ -32,6 +32,7 @@ def _stored_finding(url: str, param: str) -> XSSFinding:
 
 
 def test_put_target_is_scanned_after_a_post_form_already_stored():
+    """A finding that already exists narrows the pass to writes that are not forms."""
     calls = []
 
     async def fake_auto(client, seed, *, browser=None, targets=None, log=None, page_stages=True):
@@ -74,8 +75,9 @@ def test_put_target_is_scanned_after_a_post_form_already_stored():
 
     assert calls, "the stored pass must still run for the API target"
     browser, page_stages, urls = calls[0]
-    # The page stages already ran and found the form sink; the browser is kept
-    # because an API sink is confirmed by rendering the page that reads it back.
+    # A stored sink already exists, so the form stages are skipped; the browser
+    # is kept because an API sink is confirmed by rendering the page that reads
+    # it back.
     assert page_stages is False
     assert browser is scanner.browser
     assert urls == [("PUT", "https://t.test/rest/products/1/reviews")]

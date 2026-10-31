@@ -56,6 +56,11 @@ _SETTLE_SECONDS = 1.6
 # Hard cap on closing a page. A wedged handler can make close() hang forever.
 _CLOSE_SECONDS = 5.0
 
+# Navigations a speculative confirmation leaves untouched on a host. A route the
+# bundle only suggests is a guess; a sink whose record was written and read back
+# is not, and the budget is too small for guesses to consume the whole of it.
+_SPECULATIVE_RESERVE = 4
+
 
 _CONSOLE_HOOK = """
 // Observe console output of injected payloads (fallback when dialogs are blocked)
@@ -132,6 +137,7 @@ class BrowserConfirmer:
         self._browser = None
         self._sem = asyncio.Semaphore(max(1, config.browser_concurrency))
         self._budget = {}  # host -> remaining navigations
+        self._spent = {}  # host -> {kind: navigations taken}
         self.available = False
         self.navigations = 0
 
@@ -211,16 +217,61 @@ class BrowserConfirmer:
     # budget (avoid hammering a host with Chromium navigations)
     # ------------------------------------------------------------------
 
-    def _may_navigate(self, url: str) -> bool:
+    def _take_slot(
+        self, url: str, *, speculative: bool = False, reserve: int = 0, kind: str = ""
+    ) -> bool:
+        """Take one navigation slot for *url*'s host, or refuse.
+
+        Checking and spending are one operation: confirmations are awaited from
+        several scan tasks at once, and a caller that only checked would let the
+        next one take the same last slot.
+
+        *speculative* marks a navigation the scan has no evidence for — a route
+        the bundle merely suggests. It may not touch the last *reserve* slots,
+        which belong to confirmations of a value that was written and read back,
+        so a run of guesses cannot starve the one result that is already proven.
+
+        *kind* is what the navigation is for, when the caller knows: the slots
+        it spends are recorded per kind so the scan can say where the budget
+        went instead of leaving an exhausted host as one unexplained number.
+        """
         cap = self.config.max_confirm_per_host
         if cap <= 0:
+            # Uncapped means uncapped: nothing is spent, so nothing has to be
+            # tracked, and ``budget_left`` and the spend agree on that host.
             return True
         host = urlparse(url).netloc
         left = self._budget.get(host, cap)
+        if speculative and left <= max(0, reserve):
+            return False
         if left <= 0:
             return False
         self._budget[host] = left - 1
+        if kind:
+            spent = self._spent.setdefault(host, {})
+            spent[kind] = spent.get(kind, 0) + 1
         return True
+
+    def _may_navigate(
+        self, url: str, *, speculative: bool = False, reserve: int = 0, kind: str = ""
+    ) -> bool:
+        return self._take_slot(url, speculative=speculative, reserve=reserve, kind=kind)
+
+    def can_spend(
+        self, url: str, *, speculative: bool = False, reserve: int = 0
+    ) -> bool:
+        """Whether a navigation of *url* would be allowed, without spending it.
+
+        A caller that plans a navigation may ask first and let ``confirm`` take
+        the slot, so one navigation costs one slot rather than two.
+        """
+        cap = self.config.max_confirm_per_host
+        if cap <= 0:
+            return True
+        left = self._budget.get(urlparse(url).netloc, cap)
+        if left <= 0:
+            return False
+        return not (speculative and left <= max(0, reserve))
 
     def budget_left(self, url: str) -> int:
         """Navigations still allowed for *url*'s host (a large number if uncapped)."""
@@ -351,6 +402,9 @@ class BrowserConfirmer:
         storage: Optional[dict] = None,
         session_storage: Optional[dict] = None,
         warm_url: str = "",
+        speculative: bool = False,
+        kind: str = "",
+        reserve: Optional[int] = None,
     ) -> BrowserConfirmResult:
         """
         Navigate to *url* and decide whether our payload executed.
@@ -373,11 +427,15 @@ class BrowserConfirmer:
         all, so the page that renders it has to be *opened* first; the payload
         is then driven against the page as it stands rather than against a URL
         that merely repeats it.
+
+        *speculative* marks a navigation the scan has no evidence for. It may
+        not spend the last slots of the per-host budget, which are held for
+        confirmations of a value that a request already showed to be live.
+        *reserve* is how many of those slots to leave; the default floor is used
+        when the caller has a better reason for it.
         """
         if not self.available or not self._browser:
             return BrowserConfirmResult(False, "browser_unavailable")
-        if not self._may_navigate(url):
-            return BrowserConfirmResult(False, "confirm_budget_exhausted")
 
         timeout_ms = timeout_ms or self.config.browser_timeout_ms
         budget = timeout_ms / 1000.0 + _SETTLE_SECONDS + _CLOSE_SECONDS * 3
@@ -397,6 +455,9 @@ class BrowserConfirmer:
                     storage=storage,
                     session_storage=session_storage,
                     warm_url=warm_url,
+                    speculative=speculative,
+                    kind=kind,
+                    reserve=reserve,
                 ),
                 timeout=budget,
             )
@@ -419,6 +480,9 @@ class BrowserConfirmer:
         storage: Optional[dict] = None,
         session_storage: Optional[dict] = None,
         warm_url: str = "",
+        speculative: bool = False,
+        kind: str = "",
+        reserve: Optional[int] = None,
     ) -> BrowserConfirmResult:
         if not self.available or not self._browser:
             return BrowserConfirmResult(False, "browser_unavailable")
@@ -427,6 +491,18 @@ class BrowserConfirmer:
         timeout_ms = timeout_ms or self.config.browser_timeout_ms
 
         async with self._sem:
+            # The slot is taken here, not in ``confirm``: a caller that is not
+            # on the browser's event loop, or one that asks while the browser is
+            # unavailable, must not spend a navigation it cannot make. A
+            # speculative navigation also stops at the reserve, so the last
+            # slots of the host stay for values a request already proved live.
+            if not self._may_navigate(
+                url,
+                speculative=speculative,
+                reserve=_SPECULATIVE_RESERVE if reserve is None else reserve,
+                kind=kind or ("route" if speculative else "reflected"),
+            ):
+                return BrowserConfirmResult(False, "confirm_budget_exhausted")
             page = None
             dialog_msg = ""
             dialog_hit = False
@@ -507,8 +583,8 @@ class BrowserConfirmer:
                 if warm_url and warm_url != url:
                     # A stored record is not part of the handler's response: it
                     # appears when the page that renders it is opened. Load that
-                    # page first (its ``goto`` is what the dialog listener is
-                    # armed for), then run the same ladder against the loaded
+                    # page first — one navigation, the one this confirmation is
+                    # charged for — then run the same ladder against the loaded
                     # document.
                     try:
                         await page.goto(
@@ -523,12 +599,18 @@ class BrowserConfirmer:
                     # so the sink's own branch decision matches the attack.
                     await self._open_with_referrer(page, referrer, url, timeout_ms)
                 else:
+                    self.navigations += 1
+                    # The decisive failure is "the plan reached this page and
+                    # the payload still did not run". A same-document fragment
+                    # change that Playwright does not treat as a navigation
+                    # must not make that look like a navigation failure.
                     try:
                         await page.goto(url, timeout=timeout_ms, wait_until="domcontentloaded")
                     except PlaywrightTimeout:
                         pass
                     except Exception as e:
-                        return BrowserConfirmResult(False, f"navigation_error:{e}")
+                        if page.url.split("#", 1)[0] != url.split("#", 1)[0]:
+                            return BrowserConfirmResult(False, f"navigation_error:{e}")
 
                 # (1) Immediate dialogs — onload / onerror / parser-inserted.
                 # Some pages defer execution through a timer (the payload runs
@@ -759,6 +841,7 @@ class BrowserConfirmer:
         markup: str,
         marker: str = "",
         timeout_ms: Optional[int] = None,
+        kind: str = "",
     ) -> BrowserConfirmResult:
         """Load *url* and run *markup* as the page's own content.
 
@@ -775,7 +858,7 @@ class BrowserConfirmer:
         """
         if not self.available or not self._browser:
             return BrowserConfirmResult(False, "browser_unavailable")
-        if not self._may_navigate(url):
+        if not self._may_navigate(url, kind=kind or "stored"):
             return BrowserConfirmResult(False, "confirm_budget_exhausted")
         timeout_ms = timeout_ms or self.config.browser_timeout_ms
         budget = timeout_ms / 1000.0 + _SETTLE_SECONDS + _CLOSE_SECONDS * 3
