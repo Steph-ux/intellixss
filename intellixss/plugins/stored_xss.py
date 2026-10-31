@@ -295,6 +295,14 @@ async def scan_server_stored(
     data = dict(base_data or {})
     uid = hashlib.md5(f"{field}{time.time()}".encode()).hexdigest()[:8]
 
+    # A record whose other fields went out empty is refused by the handler and
+    # looks exactly like a field that does not persist. ``data`` is whatever the
+    # discovery target posted, and for a form it is the hidden inputs only: the
+    # comment body is the payload and the author, mail and site are blank. Fill
+    # them with plausible values before the first write, so the canary tests
+    # persistence rather than the handler's validation rule. Only names the
+    # form actually posts are added; a JSON API's own fields are left alone.
+    #
     # The form is fetched once, and it answers two questions the handler cannot:
     # whether the write is *located elsewhere* (an action endpoint that renders
     # a "submitted" page, with the record shown back on the page that carries
@@ -318,6 +326,7 @@ async def scan_server_stored(
             break
         if not form_html:
             form_html = html
+    data = _fill_untargeted_fields(data, _form_field_names(form_html), field)
     wrap = URL_SHAPE if wants_url(field_html) else ""
 
     # A field that only accepts a link is still tested with the record inside
@@ -954,6 +963,94 @@ def _analyze_at_offset(body: str, canary: str, start: int):
         return _analyze_at(body, canary, start, start + len(canary)).context
     except Exception:
         return None
+
+
+def _opens_a_complete_element(payload: str) -> bool:
+    """True when *payload* contains a whole element, not a fragment of one.
+
+    ``<img src=x onerror=…>`` opens and closes a tag by itself: wherever the
+    page places the value, the parser sees a complete element with a handler.
+    A fragment such as ``onerror=alert(1)`` or ``1' onerror=…`` only means
+    something inside markup the page already opened, so it is not treated this
+    way and keeps the classified context.
+    """
+    return bool(
+        re.search(r"""<[A-Za-z][\w:-]*\b[^<>]*?["']?\s*/?>""", payload or "")
+    ) and ">" in (payload or "")
+
+
+# The lab `stored/lab-html-context-nothing-encoded` takes arbitrary markup in its
+# comment form and renders it unencoded — the easiest stored XSS in the set —
+# and the scanner reported it CLEAN with no finding at all. The write target is
+# picked from the form's fields and the other three went out empty; a handler
+# that stores a comment with no author drops the comment, so the canary never
+# existed and every payload looked inert. The filler below is the retry for that
+# silence: what a form field is given when a record needs a value to be accepted
+# but the scan is not attacking that field. The shapes are the ones the form
+# itself would ask a person for.
+_FILLER_BY_HINT = (
+    (("email", "mail"), lambda: "scan@intellixss.invalid"),
+    (("website", "url", "homepage", "site"), lambda: "https://intellixss.invalid/"),
+    (("phone", "tel", "mobile"), lambda: "+10000000000"),
+    (("password", "passwd", "pass"), lambda: "Passw0rd!x9"),
+    (("message", "content", "body", "text", "comment", "feedback"), lambda: "Scanned by IntelliXSS"),
+    (("title", "subject", "headline"), lambda: "Scan note"),
+    (("name", "author", "nick", "user", "login"), lambda: "IntelliXSS"),
+)
+
+
+def _filler_for_field(field: str) -> str:
+    """A plausible value for a field the scan is not targeting.
+
+    Matching is on the field name because that is all a form offers: the shape
+    a handler validates is a property of the value it receives, and an email
+    address posted into ``email`` is the only version of it that is accepted.
+    """
+    low = (field or "").lower()
+    for hints, make in _FILLER_BY_HINT:
+        if any(h in low for h in hints):
+            return make()
+    return "IntelliXSS"
+
+
+def _form_field_names(html: str) -> List[str]:
+    """Every input name a form posts, in document order.
+
+    A handler that drops a comment with no author accepts it once the author is
+    there, so the names come from the markup the target itself serves rather
+    than from a list of field names the scanner expects.
+    """
+    names: List[str] = []
+    for m in re.finditer(
+        r"""<(?:input|textarea|select)\b[^>]*\bname\s*=\s*["']([^"']+)["']""",
+        html or "",
+        re.I,
+    ):
+        name = m.group(1).strip()
+        if name and name not in names:
+            names.append(name)
+    return names
+
+
+def _fill_untargeted_fields(
+    data: Dict[str, str], fields: List[str], field: str, value: Optional[str] = None
+) -> Dict[str, str]:
+    """Fill every posted field except the one under test, without overwriting.
+
+    ``value`` is the payload already chosen for *field*, when there is one; the
+    placeholder keeps a record from being written with an empty comment while
+    the caller waits to replace it. Values the scan already set are kept: a form
+    driven with an identity's own data must not be rewritten.
+    """
+    out = dict(data or {})
+    for name in fields:
+        if name == field:
+            if value is not None and not out.get(name):
+                out[name] = value
+            continue
+        if not out.get(name):
+            out[name] = _filler_for_field(name)
+    return out
 
 
 def _opens_a_complete_element(payload: str) -> bool:
