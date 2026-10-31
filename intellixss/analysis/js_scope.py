@@ -299,6 +299,9 @@ class _Resolver:
                 for decl in child.children:
                     if decl.type == "variable_declarator":
                         self._declare_pattern(_child(decl, "name"), block, kind)
+                # Marking must follow declaration: the binding it promotes is
+                # the one just created, not one that does not exist yet.
+                self._merge_duplicate_functions(child, block)
                 # A declarator's *value* can hold a nested function
                 # (``const f = () => …``), whose names belong to its own block.
                 for decl in child.children:
@@ -322,6 +325,37 @@ class _Resolver:
                 continue
             else:
                 self.declare(child, block)
+
+    def _merge_duplicate_functions(self, decl: Node, block: Block) -> None:
+        """Record a top-level ``var a = …`` as a second definition of ``a``.
+
+        A bundle flattened to one scope declares the same minified name many
+        times, each behind its own guard: ``if (typeof f === "function") …``.
+        Lexically that is one binding whose last write wins, and every earlier
+        flow disappears. Operationally each definition runs the first time its
+        guard holds, so the analysis keeps them all and marks the name
+        *multi-defined*. A write to such a name is retained, because the
+        analysis cannot prove *which* definition will receive it — the
+        alternative is reporting nothing, which is what the bundle produced.
+        """
+        if block.parent is not None:
+            return
+        for candidate in decl.children:
+            if candidate.type != "variable_declarator":
+                continue
+            name = _child(candidate, "name")
+            value = _child(candidate, "value")
+            if name is None or name.type != "identifier" or value is None:
+                continue
+            if value.type not in ("function_expression", "arrow_function"):
+                continue
+            label = _name_of(name, self.src_bytes)
+            existing = block.binding(label)
+            if existing is not None:
+                # Any second function-valued declaration of the same name in
+                # one block promotes it: the analysis can no longer say which
+                # body a later write belongs to, so it keeps all of them.
+                existing.kind = "multi"
 
     def _declare_pattern(self, pat: Optional[Node], block: Block, kind: str) -> None:
         """Register every name a binding pattern declares."""

@@ -574,8 +574,18 @@ def analyze_dom_flows(
     if not js.strip():
         return []
 
+    # The parse-tree engine answers first: it is the more precise of the two,
+    # because a local ``const hash`` is not ``location.hash`` and a computed
+    # property names no sink. Its answer is a *floor*, not a substitute: the
+    # regex analyser still runs for the sources it does not model yet (the
+    # jQuery parameter helper, for instance), and the two results are merged.
+    # Dropping the regex answer on a clean parse would silently lose every flow
+    # its rules can see and the tree has no node for, which is precisely the
+    # regression a parallel run exists to catch.
+    tree = _tree_flows(scripts) or []
+
     tainted = _tainted_vars(js)
-    flows: List[Tuple[str, str, str]] = []
+    flows: List[Tuple[str, str, str]] = list(tree)
 
     present_sources = [label for pat, label in _SOURCE_PATTERNS if re.search(pat, js)]
     if not present_sources and not tainted:
@@ -617,6 +627,37 @@ def analyze_dom_flows(
             continue
         seen.add(f)
         out.append(f)
+    return out
+
+
+def _tree_flows(scripts: List[str]) -> Optional[List[Tuple[str, str, str]]]:
+    """Flows from the parse-tree engine, or None when it cannot answer.
+
+    ``None`` is the only signal for "use the regex analyser": no grammar, or a
+    resolver that produced no blocks at all. An empty list is a verdict, not a
+    fallback — the file parsed and has no source reaching a sink.
+    """
+    try:
+        from .js_scope import resolve_scopes
+    except Exception:  # pragma: no cover - grammar not installed
+        return None
+    if not scripts:
+        return None
+    try:
+        blocks = resolve_scopes(scripts)
+    except Exception:  # pragma: no cover - defensive, a scanner must not die
+        return None
+    if not blocks:
+        return None
+    seen = set()
+    out: List[Tuple[str, str, str]] = []
+    for block in blocks:
+        for write in block.tainted_writes:
+            flow = (write.source, write.sink, write.family)
+            if flow in seen:
+                continue
+            seen.add(flow)
+            out.append(flow)
     return out
 
 
