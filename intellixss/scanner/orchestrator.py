@@ -1054,7 +1054,14 @@ class Scanner:
             confidence=0.75,
             char_probe=None,
         )
-        await self._confirm_with_browser(finding, ctx, marker=finding.marker)
+        # This flow is evidence: its source is read by the page itself and its
+        # sink is already named. Declaring it before confirming reserves the
+        # navigation, so a route probe on the same host cannot spend it first.
+        self.browser.note_seeded_pending(target.url, 1)
+        try:
+            await self._confirm_with_browser(finding, ctx, marker=finding.marker)
+        finally:
+            self.browser.note_seeded_confirmed(target.url)
         async with lock:
             self._add(result, finding)
 

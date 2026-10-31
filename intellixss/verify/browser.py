@@ -138,6 +138,9 @@ class BrowserConfirmer:
         self._sem = asyncio.Semaphore(max(1, config.browser_concurrency))
         self._budget = {}  # host -> remaining navigations
         self._spent = {}  # host -> {kind: navigations taken}
+        # host -> seeded flows still to confirm. A probe may not spend into
+        # these: they are evidence, the probe is a guess.
+        self._seeded_pending = {}
         self.available = False
         self.navigations = 0
 
@@ -217,6 +220,35 @@ class BrowserConfirmer:
     # budget (avoid hammering a host with Chromium navigations)
     # ------------------------------------------------------------------
 
+    def note_seeded_pending(self, url: str, count: int) -> None:
+        """Declare that *count* seeded flows on *url*'s host still need a slot.
+
+        A seeded flow is one whose source the page itself reads — a value out of
+        ``localStorage``, a referrer, a window name — with a sink the analysis
+        has already named. Confirming it is evidence, not a guess, so its
+        navigations are protected from probes that would spend them on a route
+        the bundle only suggested. The protection is a count that shrinks as the
+        flows are confirmed, not a constant.
+        """
+        host = urlparse(url).netloc
+        if count > 0:
+            self._seeded_pending[host] = count
+        else:
+            self._seeded_pending.pop(host, None)
+
+    def note_seeded_confirmed(self, url: str) -> None:
+        """One queued seeded flow has been confirmed: release its slot."""
+        host = urlparse(url).netloc
+        left = self._seeded_pending.get(host, 0) - 1
+        if left > 0:
+            self._seeded_pending[host] = left
+        else:
+            self._seeded_pending.pop(host, None)
+
+    def _seeded_reserve(self, url: str) -> int:
+        """Navigations a probe must leave for the seeded flows still queued."""
+        return max(0, self._seeded_pending.get(urlparse(url).netloc, 0))
+
     def _take_slot(
         self, url: str, *, speculative: bool = False, reserve: int = 0, kind: str = ""
     ) -> bool:
@@ -242,7 +274,11 @@ class BrowserConfirmer:
             return True
         host = urlparse(url).netloc
         left = self._budget.get(host, cap)
-        if speculative and left <= max(0, reserve):
+        # A probe protects both what the caller asked for and every seeded flow
+        # still queued on this host: the larger of the two, because either one
+        # being starved is the failure the reserve exists to prevent.
+        floor = max(max(0, reserve), self._seeded_reserve(url))
+        if speculative and left <= floor:
             return False
         if left <= 0:
             return False
@@ -271,7 +307,8 @@ class BrowserConfirmer:
         left = self._budget.get(urlparse(url).netloc, cap)
         if left <= 0:
             return False
-        return not (speculative and left <= max(0, reserve))
+        floor = max(max(0, reserve), self._seeded_reserve(url))
+        return not (speculative and left <= floor)
 
     def budget_left(self, url: str) -> int:
         """Navigations still allowed for *url*'s host (a large number if uncapped)."""
