@@ -99,3 +99,12 @@ def test_the_word_tag_in_an_attribute_is_not_a_kept_tag():
 def test_a_page_without_the_record_says_nothing_either_way():
     """No record on the page: the probe cannot judge, so it keeps the claim."""
     assert probes("<p>nothing here</p>")
+
+
+def test_a_page_that_did_not_load_says_nothing_either_way():
+    """A 404 body says nothing about what the page does with markup.
+
+    Reading it as "stripped" downgrades a field whose page simply was not
+    reachable at that URL.
+    """
+    assert probes("Not Found")

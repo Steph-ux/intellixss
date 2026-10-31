@@ -11,7 +11,7 @@ import hashlib
 import re
 import time
 from typing import List, Optional
-from urllib.parse import urljoin, urlparse
+from urllib.parse import parse_qsl, urlencode, urljoin, urlparse
 
 from bs4 import BeautifulSoup
 
@@ -199,6 +199,16 @@ def _action_of(form_html: str) -> str:
     return m.group(1) if m else ""
 
 
+def _carries_a_form(markup: str) -> bool:
+    """Whether *markup* is a document with a form in it, not a fragment."""
+    return bool(markup) and bool(re.search(r"<form\b", markup, re.I))
+
+
+def _carries_a_form(markup: str) -> bool:
+    """Whether *markup* is a document with a form in it, not a fragment."""
+    return bool(markup) and bool(re.search(r"<form\b", markup, re.I))
+
+
 def _handler_is_form_page(form_html: str, form_page: str) -> bool:
     """Whether the form posts back to the page that carries it.
 
@@ -206,7 +216,12 @@ def _handler_is_form_page(form_html: str, form_page: str) -> bool:
     very document that displays it; the handler's own response then already
     contains the stored value. An action naming another path (``/post/comment``)
     is a separate endpoint whose response is not the record's page.
+
+    The action is read only from a document that actually carries the form: a
+    caller that passes the wrong page must not be answered by a guess.
     """
+    if not form_page or not form_html or not _carries_a_form(form_html):
+        return False
     action = _action_of(form_html)
     if not form_page:
         return False
@@ -486,6 +501,19 @@ async def _stored_run(
             # storage, so it is skipped rather than counted as a failed render.
             continue
         if canary in body_r:
+            # The page shows the value — but a listing that renders what was
+            # *just written* looks the same until it is read again. A record
+            # survives a read that writes nothing; an echo does not. Asking
+            # that once, here, is what keeps the payloads below from being
+            # written to a page that has already forgotten them.
+            _again_st, again_body, _ah = await _render_one(client, candidate)
+            if _renders_records(_again_st, again_body) and canary not in again_body:
+                log(
+                    f"stored: {candidate[:60]} showed the canary once and "
+                    f"then dropped it — not a record",
+                    "debug",
+                )
+                continue
             stored = True
             render_body = body_r
             # The endpoint that returned the record is where the payload has to
@@ -507,8 +535,36 @@ async def _stored_run(
         render_body = body
         render_urls = [fin or form_url]
 
+    # A handler that answered the canary with a refusal did not store it. Every
+    # payload would be refused for the same reason the canary was, so writing
+    # them is spending requests on a question already answered.
+    if st in _REFUSAL_STATUSES:
+        log(
+            f"stored: handler refused the canary with {st} for "
+            f"field={field} — nothing to write",
+            "debug",
+        )
+        return findings
+
     if not stored:
-        log(f"stored: canary not persisted for field={field}", "debug")
+        # The write was answered, but nothing was ever rendered: neither the
+        # page nor the handler's own answer carries the value. A payload would
+        # be measured against a record that does not exist, so the canary's
+        # answer stands for the field.
+        #
+        # A read that answered a *status* rather than a document (``204 No
+        # Content``, a refused read) is not that answer: it says the record
+        # could not be looked at, not that it was not kept, and the persistence
+        # proof below is the only thing entitled to refuse it.
+        looked = body if _renders_records(st, body) else ""
+        if not looked or canary in looked:
+            log(f"stored: canary not persisted for field={field}", "debug")
+            return findings
+        log(
+            f"stored: canary accepted by {form_url[:60]} but never rendered "
+            f"for field={field} — nothing to write",
+            "debug",
+        )
         return findings
 
     log(f"stored: server persistence OK field={field}", "info")
@@ -553,7 +609,13 @@ async def _stored_run(
     # back. An unread page, a refused write or a page holding no value answers
     # nothing and leaves the claim where it was.
     executable = await _markup_reaches_the_page(
-        client, form_url, field=field, method=method, send=send, data=data, log=log
+        client,
+        render_page,
+        field=field,
+        method=method,
+        send=send,
+        data=data,
+        log=log,
     )
     if not executable:
         log(f"stored: markup stripped before the page field={field}", "debug")
@@ -622,6 +684,36 @@ async def _stored_run(
             # the value is worth reporting, the script in it is not.
             finding: Optional[XSSFinding] = None
             refuted = not executable or ctx_kind in _TEXT_ONLY_CONTEXTS
+            # Proof that the endpoint owns this record is one write and one
+            # read of a value that executes nothing, made once and only for a
+            # payload that would otherwise be credited. A page that strips
+            # markup never gets that far — its record is what it is — and a
+            # payload the page re-serialises without executing is refused by its
+            # own judgement rather than by a route nobody asked about.
+            if not refuted and not stored_proof:
+                stored_proof = await _prove_persistence(
+                    client,
+                    form_url,
+                    ru,
+                    field,
+                    method,
+                    data,
+                    json_body=json_body,
+                )
+                if not stored_proof and field in _form_field_names(form_html):
+                    # The handler does not own this record — it answers a
+                    # submission but keeps nothing, and the page shows the
+                    # value from the query that was just sent. That is a
+                    # statement about fields the form actually submits. A
+                    # parameter the page *renders* but the form never posts
+                    # (``?postId=``, a slug, a tab) has no record to keep: it
+                    # is reflected by the page, and refusing it here would
+                    # discard every DOM-routed sink on such a page.
+                    log(
+                        f"stored: {ru[:60]} answered but does not keep the value",
+                        "debug",
+                    )
+                    continue
             if not refuted:
                 out = evaluate_response(
                     url=ru,
@@ -691,20 +783,6 @@ async def _stored_run(
                 # same record again and be reported as the same reflection.
                 return findings
             finding.marker = marker
-            # Storage is proven by writing a value that executes nothing and
-            # reading it back with no payload in the request. It is proven once
-            # per endpoint and field, before the payloads: a handler that
-            # answers ``status: success`` without keeping the record would
-            # otherwise be credited with the sink behind it on every payload,
-            # and re-writing to check would overwrite the record under test.
-            if not stored_proof:
-                stored_proof = await _prove_persistence(client, ru, field, method, data)
-            if not stored_proof:
-                log(
-                    f"stored: {ru[:60]} answered but does not keep the value",
-                    "debug",
-                )
-                continue
             finding.verified_by = "reflection"
 
             if (
@@ -787,6 +865,17 @@ async def _stored_run(
 
 _PROOF_PREFIX = "ixproof"
 
+# What a URL field is given when it insists on one. The canary follows it, so
+# the record is still looked for by text the field's validation cannot strip.
+_PROOF_ORIGIN = "http://ixv.example"
+
+
+# Statuses a write is answered with when it was not accepted: the value is
+# checked and rejected, the session does not allow it, or the request was
+# refused outright. None of them stores a record, so a field answered this way
+# has nothing for a payload to reach.
+_REFUSAL_STATUSES = frozenset({400, 401, 403, 405, 409, 419, 422, 498})
+
 
 def _strip_query(url: str) -> str:
     """*url* without its query string, which is where a read-back echo hides."""
@@ -794,8 +883,52 @@ def _strip_query(url: str) -> str:
     return parts._replace(query="", fragment="").geturl()
 
 
+# Parameters that name the record's own page rather than drive the document:
+# the article a form posts to, the product whose reviews it lists. Dropping
+# them reads the same page for a different record — a listing, an index, an
+# error — which is what separates a page that echoes its query from one that
+# renders a record.
+_RECORD_PARAMETER_RE = re.compile(
+    r"^(?:post|product|item|article|thread|topic|record|entry|message|note)"
+    r"(?:Id|_id|ID)?$",
+    re.I,
+)
+_RECORD_PARAMETER_PAIR_RE = re.compile(
+    r"^/post/[^/]+$",
+    re.I,
+)
+
+
+def _without_the_record_parameter(url: str) -> str:
+    """*url* with the parameter that names the record removed, and no other.
+
+    A page that echoes its query carries the value in *any* read that includes
+    it, so the parameter the value arrived in has to go. Every other parameter
+    stays: ``/post?postId=9&lang=fr`` is still the article page, and turning it
+    into ``/post`` is a different resource the site may answer with ``400``.
+    """
+    parts = urlparse(url)
+    if not parts.query:
+        return url
+    pairs = [
+        (k, v)
+        for k, v in parse_qsl(parts.query, keep_blank_values=True)
+        if not _RECORD_PARAMETER_RE.match(k)
+    ]
+    if len(pairs) == len(parse_qsl(parts.query, keep_blank_values=True)):
+        return url
+    return parts._replace(query=urlencode(pairs)).geturl()
+
+
 async def _prove_persistence(
-    client: HttpClient, url: str, field: str, method: str, data: dict
+    client: HttpClient,
+    handler_url: str,
+    page_url: str,
+    field: str,
+    method: str,
+    data: dict,
+    *,
+    json_body: bool = False,
 ) -> Optional[str]:
     """Re-read a stored value with no payload involved, so it proves storage.
 
@@ -805,34 +938,67 @@ async def _prove_persistence(
     payload-shaped value that executes nothing, and only a value that is still
     there the second time counts as a record this endpoint owns. Without it the
     sink behind the handler is credited to a route that never stores.
+
+    The value is written to *handler_url*, the endpoint the form posts to, in
+    the encoding that endpoint answers in: a form handler reads form fields and
+    answers ``405`` to a JSON body, while an API target read from a bundle reads
+    JSON and rejects form fields. The record is then looked for on *page_url*,
+    the document that renders it, because the handler is rarely a document.
+
+    The clean read has to be of the same document, so only the page's own
+    ``postId`` is dropped. Removing the whole query asks for a different
+    resource: ``/post`` is a ``400`` on a site where the article list lives at
+    ``/``, and a page that cannot answer is not evidence that it echoed.
+
+    The canary is written in the same shape the payloads are. A ``website``
+    field is checked as a URL, and a bare ``ixproof…`` is refused as one, so a
+    field that stores every payload would be refused here and dropped with
+    them. The rule is the caller's: a value with no scheme of its own is what a
+    URL field rejects, so it is carried by one — and the record is looked for by
+    the canary's own text, which survives that prefix.
     """
     uid = hashlib.md5(f"proof{field}{time.time()}".encode()).hexdigest()[:8]
     canary = f"{_PROOF_PREFIX}{uid}"
+    # A field the page checks as a URL refuses a value with no scheme, and the
+    # payloads the caller writes to it carry their own. Writing a bare canary
+    # would be refused where the payloads were accepted, and the field would be
+    # dropped with a proof that asked a different question than the payloads.
+    written = canary if canary.startswith(("http://", "https://", "//")) else (
+        f"{_PROOF_ORIGIN}/{canary}"
+    )
     saved = data.get(field)
     try:
-        data[field] = canary
+        data[field] = written
         st, _body, _h, _fin = await _submit(
-            client, url, field, canary, method, data, wrap="", json_body=True
+            client,
+            handler_url,
+            field,
+            written,
+            method,
+            data,
+            wrap="",
+            json_body=json_body,
         )
         if not st or st >= 400:
             return None
         for _ in range(2):
-            r_st, r_body, _rh = await _render_one(client, url)
+            r_st, r_body, _rh = await _render_one(client, page_url)
             if not r_st or not r_body or canary not in r_body:
                 return None
         # A listing that merely reflects what was sent shows the value in the
         # query string of the next read, before any record exists. Reading the
-        # clean URL is what tells the two apart. A page that answers the clean
-        # URL *and* still carries the value is showing its record — that is
-        # proof, whatever else is true. A page that answers the clean URL with
-        # nothing is not the record's page, so the query read is all there is,
-        # and the two identical reads above are the evidence. A handle that
-        # cannot read a clean URL at all falls back to those two reads as well.
-        clean = _strip_query(url)
-        if clean == url:
+        # document without the parameter the record belongs to is what tells
+        # the two apart. A page that answers that read *and* still carries the
+        # value is showing its record — that is proof, whatever else is true.
+        # A page that answers it with nothing is not the record's page, so the
+        # two identical reads above are the evidence. A read that the site
+        # refuses, or a document whose only parameter is the record id, cannot
+        # separate the two and falls back to those two reads as well.
+        clean = _without_the_record_parameter(page_url)
+        if clean == page_url:
             return canary
         clean_st, clean_body, _ch = await _render_one(client, clean)
-        if clean_st and clean_body:
+        if clean_st and clean_st < 400 and clean_body:
             return canary if canary in clean_body else None
         return canary
     finally:
@@ -901,6 +1067,10 @@ async def _markup_reaches_the_page(
         status, page, _h = await _render_one(client, url)
         page = page or ""
         if not _judged(page, marker):
+            # The page did not carry the record: a 404, a refused read, a login
+            # redirect, an empty listing. Nothing here says what the page does
+            # with markup, so the claim stays where it was rather than being
+            # read as a stripped field.
             log(
                 f"stored: markup probe field={field} status={status} "
                 f"value_on_page=False — nothing to judge",
@@ -1426,6 +1596,23 @@ def _is_document(url: str) -> bool:
     return "/json" not in path and not path.endswith("/api")
 
 
+def _with_the_page_query(path: str, query: str, page_url: str) -> str:
+    """Join an endpoint the page names to its absolute URL.
+
+    The page's own query string is carried over only when the script does not
+    name one. A comments request has to ask for the article the record belongs
+    to, so ``loadComments('/post/comment')`` needs ``?postId=9``. A paginated or
+    parameterised endpoint (``/rest/products/search?q=app``,
+    ``/post/comment?postId=3``) already says what it wants, and appending the
+    page's query to it asks for a different resource — the server answers 400
+    and the record looks like it was never stored.
+    """
+    target = urljoin(page_url, path)
+    if not query or "?" in path:
+        return target
+    return target + query
+
+
 async def _render_endpoints(
     client: HttpClient,
     page_url: str,
@@ -1469,12 +1656,17 @@ async def _render_endpoints(
     for text in sources:
         # ``loadComments('/post/comment')``: a call whose argument is a literal
         # path — the callee is what builds the request.
-        for m in re.finditer(r"""\(\s*['"](/[^'"\s]*)['"]\s*\)""", text):
-            path = m.group(1)
-            endpoints.append(urljoin(page_url, path) + query)
+        for m in re.finditer(r"""\(\s*['"](/[^'"]*)['"]\s*\)""", text):
+            endpoints.append(_with_the_page_query(m.group(1), query, page_url))
         # ``xhr.open('GET', '/api/…' + …)``: a URL literal inside the request.
-        for m in re.finditer(r"""\.open\s*\(\s*['"]\w+['"]\s*,\s*['"]([^'"]+)""", text):
-            endpoints.append(urljoin(page_url, m.group(1)) + query)
+        for m in re.finditer(r"""\.open\s*\(\s*['"]\w+['"]\s*,\s*['"]([^'"]*)""", text):
+            endpoints.append(_with_the_page_query(m.group(1), query, page_url))
+        # ``fetch('/post/comment', …)`` and ``axios.get(…)``: the same request
+        # spelled without ``open``.
+        for m in re.finditer(
+            r"""(?:fetch|axios\.(?:get|post))\s*\(\s*['"]([^'"]*)['"]""", text
+        ):
+            endpoints.append(_with_the_page_query(m.group(1), query, page_url))
 
     out: List[str] = []
     seen: set = set()
