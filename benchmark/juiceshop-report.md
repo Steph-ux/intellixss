@@ -21,7 +21,7 @@ while sending its own payload, which is what a scan is for.
 | Client-side XSS Protection | `persistedXssUserChallenge` | `POST /profile` | reproduced; challenge itself needs the literal `<iframe src="javascript:alert(`xss`)">` |
 | DOM XSS | `localXssChallenge` | `GET /#/search?q=` | reproduced |
 | HTTP-Header XSS | `httpHeaderXssChallenge` | `GET /#/privacy-security/last-login-ip` via `localStorage` | reproduced |
-| Reflected XSS | `reflectedXssChallenge` | not reached | not reached |
+| Reflected XSS | `reflectedXssChallenge` | `GET /#/track-result?id=` | reproduced |
 | Server-side XSS Protection | `persistedXssFeedbackChallenge` | `POST /api/Feedbacks` | clean |
 | Video XSS | `videoXssChallenge` | not reached | not reached |
 | Bonus Payload | `xssBonusChallenge` | not reached | not reached |
@@ -32,8 +32,8 @@ own `<img onerror>` payload, while the challenge is solved by the server
 seeing one exact injected value. The same holds for the search surface
 and the bonus payload.
 
-3 of 9 documented XSS challenges reproduced automatically.
-1 documented challenge reported clean, and 5 were not reached by this roster (see below).
+4 of 9 documented XSS challenges reproduced automatically.
+1 documented challenge reported clean, and 4 were not reached by this roster (see below).
 
 A clean result is the expected answer for `persistedXssFeedbackChallenge`: the sink is behind
 `sanitize-html` with its default allow-list, so the payload is stored as
@@ -57,6 +57,7 @@ about a header, that header. No payload is pre-written by the harness.
 |---|---|---|
 | home | shared | admin bearer |
 | search | shared | admin bearer |
+| track | shared | admin bearer |
 | reviews | shared | admin bearer |
 | feedback | shared | admin bearer |
 | complaints | shared | admin bearer |
@@ -68,31 +69,40 @@ about a header, that header. No payload is pre-written by the harness.
 
 | Surface | Pointed at | Sink | Verdict | Confirmed | Requests | Time |
 |---|---|---|---|---|---|---|
-| home | `/` | `GET /` | clean | 0 | 69 | 69.7s |
-| search | `/` | `GET /#/search?q=` | reproduced | 1 | 69 | 70.6s |
-| reviews | `/` | `PUT /rest/products/1/reviews` | lead only | 0 | 69 | 68.8s |
-| feedback | `/` | `POST /api/Feedbacks` | clean | 0 | 69 | 69.1s |
-| complaints | `/` | `POST /api/Complaints` | reproduced | 1 | 69 | 71.1s |
-| last-login-ip | `/#/privacy-security/last-login-ip` | `GET /#/privacy-security/last-login-ip` via `localStorage` | reproduced | 1 | 69 | 65.4s |
-| profile | `/profile` | `POST /profile` | reproduced | 1 | 10 | 14.8s |
-| login | `/` | `POST /rest/user/login` | clean | 0 | 69 | 69.0s |
+| home | `/` | `GET /` | clean | 0 | 69 | 74.4s |
+| search | `/` | `GET /#/search?q=` | reproduced | 1 | 69 | 75.3s |
+| track | `/` | `GET /#/track-result?id=` | reproduced | 1 | 69 | 74.3s |
+| reviews | `/` | `PUT /rest/products/1/reviews` | lead only | 0 | 69 | 74.7s |
+| feedback | `/` | `POST /api/Feedbacks` | clean | 0 | 69 | 74.1s |
+| complaints | `/` | `POST /api/Complaints` | reproduced | 1 | 69 | 71.0s |
+| last-login-ip | `/#/privacy-security/last-login-ip` | `GET /#/privacy-security/last-login-ip` via `localStorage` | reproduced | 1 | 69 | 64.1s |
+| profile | `/profile` | `POST /profile` | reproduced | 1 | 10 | 14.6s |
+| login | `/` | `POST /rest/user/login` | clean | 0 | 69 | 67.6s |
 
 ## Confirmed findings
 
-### `GET http://127.0.0.1:3000/#/search?q=%3Cimg+src%3Dx+onerror%3Dalert%28%27ixm03bac14b%27%29%3E`
+### `GET http://127.0.0.1:3000/#/search?q=%3Cimg+src%3Dx+onerror%3Dalert%28%60ixm03bac14b%60%29%3E`
 
 - Parameter: `q`
 - Context: `html_text`
 - Type: `dom`
-- Payload: `<img src=x onerror=alert('ixm03bac14b')>`
+- Payload: `<img src=x onerror=alert(`ixm03bac14b`)>`
 - Replay: hash route: execution is browser-only
+
+### `GET http://127.0.0.1:3000/#/track-result?id=%3Cimg+src%3Dx+onerror%3Dalert%28%60ixm866b973f%60%29%3E`
+
+- Parameter: `id`
+- Context: `html_text`
+- Type: `dom`
+- Payload: `<img src=x onerror=alert(`ixm866b973f`)>`
+- Replay: HTTP `200`, echoed `true`, stored `false`
 
 ### `POST http://127.0.0.1:3000/api/Complaints`
 
 - Parameter: `message`
 - Context: `html_text`
 - Type: `stored`
-- Payload: `<img src=x onerror=alert('ixm82163f7b')>`
+- Payload: `<img src=x onerror=alert('ixm84a9dfef')>`
 - Replay: HTTP `201`, echoed `true`, stored `true`
 
 ### `GET http://127.0.0.1:3000/#/privacy-security/last-login-ip`
@@ -100,7 +110,7 @@ about a header, that header. No payload is pre-written by the harness.
 - Parameter: `localStorage`
 - Context: `url_fragment`
 - Type: `dom`
-- Payload: `<img src=x onerror=alert('ixm82866704')>`
+- Payload: `<img src=x onerror=alert('ixm80182528')>`
 - Replay: hash route: execution is browser-only
 
 ### `POST http://127.0.0.1:3000/profile`
@@ -108,13 +118,12 @@ about a header, that header. No payload is pre-written by the harness.
 - Parameter: `username`
 - Context: `html_text`
 - Type: `stored`
-- Payload: `<img src=x onerror=alert('ixm47cf91a6')>`
+- Payload: `<img src=x onerror=alert('ixmd1c4eda3')>`
 - Replay: HTTP `200`, echoed `true`, stored `true`
 
 ## Not reached, and why
 
 - **API-only XSS** (`restfulXssChallenge`): needs a review submitted through the API instead of the dialog's form; the scanner drives what the page renders, and the product dialog in 20.3.0 puts the review text in a plain property binding, so it is never parsed as markup. The server-side sink is real; reaching it means posting the review the page itself does not post.
 - **CSP Bypass** (`usernameXssChallenge`): needs an account whose username is rendered on the legacy Pug profile under a CSP the challenge rewards rewriting; the bench registers accounts, but the challenge is solved by one exact stored value, not by proving the renderer executes what it is given.
-- **Reflected XSS** (`reflectedXssChallenge`): the order-tracking page reflects the id returned by its API; the roster does not drive that page with a live order. During every scan the route did confirm an executing payload for a direct `#/track-result?id=` navigation, but that route is not what the challenge turns on, so it is not credited here.
 - **Video XSS** (`videoXssChallenge`): needs an administrator to change the promo video URL.
 - **Bonus Payload** (`xssBonusChallenge`): shares the DOM XSS sink but requires one exact SoundCloud iframe; the scanner proves the sink, not the challenge's payload.

