@@ -25,7 +25,7 @@ import re
 import time
 from dataclasses import dataclass, field
 from typing import List, Optional, Tuple
-from urllib.parse import urlparse, urlsplit
+from urllib.parse import unquote, urlparse, urlsplit
 
 from intellixss.config import Config
 
@@ -609,8 +609,22 @@ class BrowserConfirmer:
                     if ok:
                         return BrowserConfirmResult(True, detail, dialog_msg or detail, "eval", bool(marker))
 
+                # A dialog that does not carry the marker is only proof when the
+                # payload can be shown to have reached this page. An endpoint
+                # that stores what it is given and re-renders it through a live
+                # sink (a tracking page printing an order id) never shows the
+                # raw payload, so the marker lives in the address bar, not in the
+                # dialog. Those interactions above can open a dialog too, so the
+                # page is read once and the answer is used for both branches.
+                # Reported as attributed=False because the marker was not seen.
                 if dialog_hit and not marker:
                     return BrowserConfirmResult(True, "dialog_unattributed", dialog_msg, "load", False)
+                if dialog_hit and marker:
+                    seen = await self._marker_in_page(page, payload, marker)
+                    if seen:
+                        return BrowserConfirmResult(
+                            True, "dialog_unattributed", dialog_msg, "load", False
+                        )
 
                 return BrowserConfirmResult(False, "no_execution_observed")
             except Exception as e:
@@ -637,6 +651,37 @@ class BrowserConfirmer:
             if marker and marker.lower() in str(h).lower():
                 return str(h)[:160]
         return ""
+
+    async def _marker_in_page(self, page, payload: str, marker: str) -> bool:
+        """True when the payload reached this page's own DOM or URL.
+
+        A dialog alone is not proof on a page that opens dialogs by itself, so
+        the page has to show that the payload arrived: either the marker is
+        present in its serialised DOM, or the payload itself is still the
+        address bar's value, which is what a route reading its query string
+        and re-rendering it has to act on. Nothing is required where the
+        payload was injected through a channel that leaves no trace (a stored
+        field, a form body): there the dialog is the only evidence there is.
+        """
+        if marker:
+            try:
+                html = await page.content()
+            except Exception:
+                html = ""
+            if html and marker.lower() in html.lower():
+                return True
+        if payload:
+            try:
+                current = await page.evaluate("() => location.href")
+            except Exception:
+                current = ""
+            # The address bar holds the payload percent-encoded, so compare
+            # on the decoded forms rather than the raw string.
+            if current:
+                decoded = unquote(current)
+                if payload in decoded or unquote(payload) in decoded:
+                    return True
+        return False
 
     async def _try_js_href_clicks(self, page, marker: str = "") -> bool:
         """Follow a ``javascript:`` link that carries our marker.
