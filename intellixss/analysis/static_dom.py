@@ -79,6 +79,11 @@ _SOURCE_PATTERNS: List[Tuple[str, str]] = [
     (r"location\.href", "location.href"),
     (r"document\.URL", "document.URL"),
     (r"document\.documentURI", "document.documentURI"),
+    # ``document.location.hash`` is ``location.hash``: the same object, reached
+    # through the path a reader wrote. The tree engine follows the same alias
+    # and reports the short spelling, so naming it here keeps one flow one name.
+    (r"document\.location\.hash", "location.hash"),
+    (r"document\.location\.search", "location.search"),
     (r"document\.referrer", "document.referrer"),
     (r"window\.name", "window.name"),
     (r"\.getParameter\s*\(", "URL parameter"),
@@ -1178,7 +1183,8 @@ def fragment_dom_finding(
             return (2, rank.get(family, 0))
         return (1 if family == "code" else 0, rank.get(family, 0))
 
-    source, sink, family = max(chosen, key=_rank)
+    ranked = max(chosen, key=_rank)
+    source, sink, family = ranked
 
     js = "\n".join(_scripts(html, external_js))
     candidates = _payload_candidates(family, sink, js, source)
@@ -1186,9 +1192,14 @@ def fragment_dom_finding(
     # the browser and a candidate without the marker cannot prove execution.
     candidates = [(_mark_payload(p, marker), why) for p, why in candidates]
     payload, rationale = candidates[0]
-    storage_flows = [f for f in flows if f[0] in ("localStorage", "sessionStorage")]
-    vuln_type = "stored_dom" if storage_flows and not hash_flows else "dom"
-    sinks = sorted({s for _, s, _ in chosen})
+    # A marker carried in the fragment cannot reach a store the page reads
+    # before the fragment is applied, so a storage flow is only "stored" when
+    # it is the flow being used: the source the payload is written for.
+    stored = ranked[0] in ("localStorage", "sessionStorage")
+    vuln_type = "stored_dom" if stored else "dom"
+    # The sink named first is the one the payload is built for, so it is the
+    # one a reader checks against the code that runs it.
+    sinks = [ranked[1]] + [s for _, s, _ in chosen if s != ranked[1]]
     evidence = (
         f"DOM taint: {source} reaches sink(s) {sinks} "
         f"(chosen: {sink}); {rationale}"

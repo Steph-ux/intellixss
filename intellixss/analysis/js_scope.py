@@ -164,10 +164,29 @@ _SOURCE_MEMBERS: Dict[Tuple[str, str], str] = {
     ("window", "name"): "window.name",
 }
 
+# ``document.location.hash`` is ``location.hash``: the same object, named by the
+# path a reader took to it. Only the names a page can write to without a
+# declaration are read as globals, and each one maps to the spelling the regex
+# engine uses, so the two engines report one flow one way.
+_GLOBAL_ALIASES = {"document", "window", "self", "top", "parent", "globalThis"}
+
+_QUALIFIED_SOURCES: Dict[Tuple[str, str], str] = {
+    ("location", "hash"): "location.hash",
+    ("location", "search"): "location.search",
+    ("location", "href"): "location.href",
+}
+
 _STORAGE_OBJECTS = {"localStorage": "localStorage", "sessionStorage": "sessionStorage"}
 _STORAGE_METHODS = {"getItem", "setItem"}
 
 # Property assignment sinks: ``el.innerHTML = value``.
+#
+# ``src`` and ``href`` are the same property for two different consequences.
+# On a ``<script>``, ``<iframe>`` or ``<img>`` the value is a URL the browser
+# fetches, and a URL payload is a script URL or a ``javascript:`` navigation,
+# never an HTML string that would land in the element's markup. Anywhere else —
+# ``location.href``, an ``<a>`` — the value is navigated to. The families are
+# kept apart because the payload builder chooses differently for each.
 _SINK_PROPERTIES: Dict[str, str] = {
     "innerHTML": "innerHTML",
     "outerHTML": "innerHTML",
@@ -177,6 +196,18 @@ _SINK_PROPERTIES: Dict[str, str] = {
     "formaction": "form_action",
 }
 
+# The property when the receiver navigates to a URL rather than loading markup.
+_SINK_PROPERTIES_URL: Dict[str, str] = {
+    "src": "frame_src",
+    "href": "location_assign",
+}
+
+# A ``src`` set on one of these loads a document the browser navigates to, so
+# the payload is a ``javascript:`` URL rather than markup. The ``location``
+# object is the same consequence reached without an element.
+_NAVIGATING_ELEMENTS = {"iframe", "frame", "embed", "object"}
+_NAVIGATING_RECEIVERS = {"location"}
+
 # Methods that parse their argument as markup or code.
 _SINK_METHODS: Dict[str, Tuple[str, str]] = {
     "insertAdjacentHTML": ("insertAdjacentHTML", "html"),
@@ -185,11 +216,20 @@ _SINK_METHODS: Dict[str, Tuple[str, str]] = {
     "html": ("jquery.html", "html"),
     "append": ("jquery.append", "html"),
     "prepend": ("jquery.prepend", "html"),
-    "eval": ("eval", "code"),
     # AOT-compiled Angular passes the bound property name as an argument:
     # ``ɵɵproperty("innerHTML", value, …)``. The first argument names the sink,
     # the second is the value.
     "property": ("innerHTML", "html"),
+}
+
+# A sink method whose *function* carries the key above, rather than its name:
+# ``eval`` is called as the identifier ``eval``, and a bare call has no member
+# to read a property off. Keyed by function name.
+_SINK_FUNCTIONS: Dict[str, Tuple[str, str]] = {
+    "eval": ("eval", "code"),
+    "setTimeout": ("eval", "code"),
+    "setInterval": ("eval", "code"),
+    "Function": ("Function_ctor", "code"),
 }
 
 # Callbacks that receive a value derived from a request, and the source label
@@ -198,6 +238,14 @@ _SINK_METHODS: Dict[str, Tuple[str, str]] = {
 _RESPONSE_METHODS = {"then", "catch", "finally"}
 # The observable equivalent: the callback is handed the request's result.
 _SUBSCRIPTION_METHODS = {"subscribe"}
+# Angular's explicit announcement that a value was *not* sanitised. The
+# ``[innerHTML]`` binding it feeds is inert with the sanitiser and executable
+# without it, so the call marks the value as markup. ``bypassSecurityTrustUrl``
+# marks it as a URL the browser will follow instead.
+_TRUST_SINKS = {
+    "bypassSecurityTrustHtml": ("innerHTML", "html"),
+    "bypassSecurityTrustUrl": ("location_assign", "src"),
+}
 # Methods that send a request. ``http.get(url).subscribe(…)`` hands the
 # callback a response, so the verb is what names it — but only when the object
 # it is called on is itself named like a request client, or every ``.get`` in a
@@ -238,6 +286,42 @@ def _text(node: Node, src: bytes) -> str:
 def _span(node: Node) -> Tuple[str, int, int]:
     """The identity of a parse node across two reads of the same tree."""
     return (node.type, node.start_byte, node.end_byte)
+
+
+def _is_code_string(node: Node, src: bytes) -> bool:
+    """Whether *node* produces a string a timer would run as code.
+
+    A literal is code only if it interpolates or concatenates something,
+    which the resolver sees through taint; an identifier, member or call is a
+    value the analysis cannot type, so it is read as text — the conservative
+    choice for ``setTimeout``, since a function argument is never a string.
+    """
+    return node.type in ("template_string", "binary_expression", "call_expression",
+                         "identifier", "member_expression", "subscript_expression",
+                         "ternary_expression", "parenthesized_expression", "await_expression")
+
+
+def _created_element_type(node: Optional[Node], src: bytes) -> Optional[str]:
+    """The tag name in ``document.createElement("script")``, if *node* is one.
+
+    ``createElement`` names the element in a string argument. Only a literal is
+    read — ``createElement(tag)`` names nothing the analysis can prove, and a
+    guess here would choose a payload family for the wrong element.
+    """
+    if node is None or node.type != "call_expression":
+        return None
+    fn = _child(node, "function") or (node.child(0) if node.child_count else None)
+    if fn is None or fn.type not in ("member_expression", "subscript_expression"):
+        return None
+    _base, prop, kind = _member_parts(fn, src)
+    if kind == "computed" or prop != "createElement":
+        return None
+    for arg in _arguments_of(_child(node, "arguments")):
+        if arg.type in ("string", "template_string"):
+            text = _text(arg, src).strip("'\"`")
+            return text.lower() or None
+        return None
+    return None
 
 
 def _child(node: Node, field_name: str) -> Optional[Node]:
@@ -603,6 +687,25 @@ class _Resolver:
             return self._class_body_of_expression(b.value, block)
         return self._class_of_name.get(base)
 
+    def _receiver_is_a_url(self, base: str, block: Block) -> bool:
+        """Whether a ``src``/``href`` set on *base* is a navigation, not markup.
+
+        True only when the receiver is *proven* to be an element the browser
+        navigates to — ``var f = document.createElement("iframe")`` followed
+        back to its initializer, or the ``location`` object itself. Anything
+        else, including a receiver the analysis cannot trace, keeps the generic
+        markup reading: a flow reported under a coarse label is still a flow,
+        and a flow withheld on a guess is the false negative this engine exists
+        to remove.
+        """
+        if base in _NAVIGATING_RECEIVERS:
+            return True
+        b = self._lookup(block.index, base)
+        if b is None or b.value is None:
+            return False
+        element = _created_element_type(b.value, self.src_bytes)
+        return element in _NAVIGATING_ELEMENTS if element else False
+
     def _class_body_of_expression(self, node: Node, block: Block) -> Optional[int]:
         """The class body a field expression's owner resolves to, if it is one.
 
@@ -879,6 +982,15 @@ class _Resolver:
         if left is not None and left.type == "identifier":
             name = _name_of(left, self.src_bytes)
             b = self._lookup(block.index, name)
+            # ``location = url`` is not a variable write: the identifier names
+            # the global navigator, and assigning to it navigates the page.
+            if b is None and name in _NAVIGATING_RECEIVERS and taint is not None:
+                block.tainted_writes.append(
+                    TaintedWrite(sink="location_assign", source=taint.source, family="src")
+                )
+                if right is not None:
+                    self.walk(right, block)
+                return
             if b is None:
                 # An implicit global (no declaration anywhere in the file).
                 b = self._bind(block, name, "var", None)
@@ -892,6 +1004,18 @@ class _Resolver:
 
         if left is not None and left.type in ("member_expression", "subscript_expression"):
             base, prop, kind = _member_parts(left, self.src_bytes)
+            # ``document.location = url`` names the navigator's *object*, not a
+            # property of it. The member read then walks to ``document`` and
+            # finds no source, so the assignment is recognised here instead.
+            head, _, tail = base.rpartition(".")
+            navigator = tail or head
+            if prop == "location" and navigator in _GLOBAL_ALIASES and taint is not None:
+                block.tainted_writes.append(
+                    TaintedWrite(sink="location_assign", source=taint.source, family="src")
+                )
+                if right is not None:
+                    self.walk(right, block)
+                return
             # The value a field now holds. Recorded by node, not applied here:
             # the class that owns the field may not have been walked yet, and
             # the value has to resolve in the block it was written in.
@@ -899,9 +1023,14 @@ class _Resolver:
             if owner is not None and right is not None:
                 self._field_writes.append((right, owner, prop, block.index))
             # A sink is only a sink when the property is written literally, and
-            # ``obj[key] = value`` names no property: it is not followed.
+            # ``obj[key] = value`` names no property: it is not followed. The
+            # receiver decides which property — a ``src`` set on a created
+            # ``<script>`` or ``<iframe>`` is navigated, not rendered, and a URL
+            # payload there has to be a script URL rather than markup.
             if kind != "computed" and taint is not None:
                 sink = _SINK_PROPERTIES.get(prop)
+                if prop in ("src", "href") and self._receiver_is_a_url(base, block):
+                    sink = _SINK_PROPERTIES_URL.get(prop)
                 if prop and prop.startswith("on"):
                     sink = "inline_handler_assign"
                 if sink:
@@ -1038,6 +1167,20 @@ class _Resolver:
                     and self._returns_a_response(_child(fn, "object"))
                 ):
                     self._bind_callback(cb, block, Taint("fetch response"))
+            # (e) ``sanitizer.bypassSecurityTrustHtml(`<b>${v}</b>`)``:
+            # Angular's sanitiser is opt-out, and this call is the opt-out. The
+            # value becomes markup at whatever ``[innerHTML]`` binding it is
+            # returned into, so the call itself is the sink.
+            if kind != "computed" and prop in _TRUST_SINKS and args is not None:
+                label, family = _TRUST_SINKS[prop]
+                for c in args.children:
+                    if c.type in ("(", ")"):
+                        continue
+                    value = self.taint_of(c, block)
+                    if value is not None:
+                        block.tainted_writes.append(
+                            TaintedWrite(sink=label, source=value.source, family=family)
+                        )
 
         # (c) jQuery's ``$(html)`` parses a string as markup.
         if fn.type == "identifier" and _name_of(fn, self.src_bytes) == "$" and args is not None:
@@ -1046,6 +1189,22 @@ class _Resolver:
                     if self.taint_of(c, block) is not None:
                         block.tainted_writes.append(
                             TaintedWrite("jquery_selector", self.taint_of(c, block).source, "html")
+                        )
+            return
+
+        # (f) ``eval(v)``, ``Function(v)``, ``setTimeout(v)`` run a string as
+        # code. ``setTimeout`` and ``setInterval`` only when handed a string: a
+        # function argument is a callback, and the timer runs it, not its text.
+        if fn.type == "identifier":
+            entry = _SINK_FUNCTIONS.get(_name_of(fn, self.src_bytes))
+            if entry is not None and args is not None:
+                label, family = entry
+                first = next((c for c in args.children if c.type not in ("(", ")", ",")), None)
+                if first is not None and (label != "eval" or _is_code_string(first, self.src_bytes)):
+                    value = self.taint_of(first, block)
+                    if value is not None:
+                        block.tainted_writes.append(
+                            TaintedWrite(sink=label, source=value.source, family=family)
                         )
 
     def _sink_argument(self, method: str, args: Optional[Node], block: Block) -> Optional[Taint]:
@@ -1215,6 +1374,16 @@ class _Resolver:
             base, prop, kind = _member_parts(node, self.src_bytes)
             if kind == "dot" and (_text(_child(node, "object"), self.src_bytes), prop) in _SOURCE_MEMBERS:
                 return Taint(_SOURCE_MEMBERS[(_text(_child(node, "object"), self.src_bytes), prop)])
+            # The qualified spelling the regex engine reports, so the two
+            # engines name one flow one way: ``location.hash`` is
+            # ``document.location.hash`` reached through ``document``.
+            # The path is read from the right: the head has to be a global, and
+            # the tail has to be ``location`` — ``document.location.hash`` and
+            # ``window.location.hash`` both name the one object.
+            head, _, tail = base.rpartition(".")
+            if _QUALIFIED_SOURCES.get((tail or head, prop)) is not None:
+                if (head or tail) in _GLOBAL_ALIASES:
+                    return Taint(_QUALIFIED_SOURCES[(tail or head, prop)])
             # A field holds the value last written to it. Without this, a
             # component that stores a response and writes the field elsewhere
             # reports nothing: the taint dies at ``this.userData``.
@@ -1305,10 +1474,43 @@ def resolve_scopes(scripts: List[str]) -> List[Block]:
         return []
 
     parser = Parser(_LANGUAGE)
+    original_source = source
     try:
         tree = parser.parse(source.encode("utf-8"))
     except Exception:  # pragma: no cover - defensive
         return []
+
+    if tree.root_node.has_error:
+        # A grammar cannot recover from every syntax error, and one broken
+        # script would otherwise blind the whole page: the analysis answers
+        # "no flow" rather than "unknown". Each entry is retried alone, and the
+        # ones that parse are analysed together, which is what a page actually
+        # is — several scripts sharing globals.
+        readable = []
+        skipped = 0
+        for script in scripts:
+            if not script or not script.strip():
+                continue
+            try:
+                part = parser.parse(script.encode("utf-8"))
+            except Exception:  # pragma: no cover - defensive
+                continue
+            if part.root_node.has_error:
+                skipped += 1
+            else:
+                readable.append(script)
+        # Rejoin whenever anything was dropped. A file is passed whole rather
+        # than as entries, so "one entry was dropped" is common and must not
+        # leave the broken text in the source the resolver reads.
+        if skipped and readable:
+            source = "\n;\n".join(readable)
+            tree = Parser(_LANGUAGE).parse(source.encode("utf-8"))
+            if tree.root_node.has_error:
+                # Join separators can be read as a new error in a file that
+                # ends inside an expression; the whole parse is then the better
+                # of the two answers rather than a third guess.
+                source = original_source
+                tree = Parser(_LANGUAGE).parse(source.encode("utf-8"))
 
     resolver = _Resolver(source)
     program = resolver._new_block("program", "", None)
