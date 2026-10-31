@@ -24,8 +24,17 @@ class _Handler:
       <input type="text" name="comment" value="{value}">
     </form></article></body></html>"""
 
-    def __init__(self, sanitise: bool) -> None:
+    # The same handler whose list renders the record as markup. Nothing is
+    # stripped here either; the difference is where the page puts the value.
+    PAGE_LIVE = """<!doctype html><html><body>
+    <article><ul><li class="note">{value}</li></ul>
+    <form method="post" action="/note">
+      <input type="text" name="comment">
+    </form></article></body></html>"""
+
+    def __init__(self, sanitise: bool, live_markup: bool = False) -> None:
         self.sanitise = sanitise
+        self.live_markup = live_markup
         self.value = ""
         self.writes: list[tuple[str, str]] = []
         self.reads = 0
@@ -42,7 +51,8 @@ class _Handler:
 
     async def request(self, method, url, **kw):
         self.reads += 1
-        return 200, self.PAGE.format(value=self.value), {}, url
+        page = self.PAGE_LIVE if self.live_markup else self.PAGE
+        return 200, page.format(value=self.value), {}, url
 
 
 def _strip_tags(value: str) -> str:
@@ -76,5 +86,17 @@ def test_a_field_that_drops_markup_is_credited_as_a_reflection():
 
 
 def test_a_field_that_keeps_markup_stays_a_stored_sink():
-    kinds = {f.vulnerability_type for f in _scan(_Handler(sanitise=False))}
+    kinds = {f.vulnerability_type for f in _scan(_Handler(sanitise=False, live_markup=True))}
     assert kinds and kinds == {"stored"}, kinds
+
+
+def test_a_record_quoted_into_a_field_value_is_not_executable():
+    """An input's ``value`` is text: keeping the tag there executes nothing.
+
+    The page strips nothing and the tag is on the page, so a probe that only
+    asked "is the tag there" would credit this sink and every payload written
+    into it. What the probe has to answer is whether the record reached markup.
+    """
+    findings = _scan(_Handler(sanitise=False))
+    assert {f.vulnerability_type for f in findings} == {"reflection"}, findings
+    assert findings[0].evidence == "server_stored:not_executable"

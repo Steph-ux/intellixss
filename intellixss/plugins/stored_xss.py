@@ -13,6 +13,8 @@ import time
 from typing import List, Optional
 from urllib.parse import urljoin, urlparse
 
+from bs4 import BeautifulSoup
+
 from intellixss.analysis.context import analyze_marker
 from intellixss.analysis.reflection import is_payload_effective
 from intellixss.analysis.static_dom import store_roundtrip_flows
@@ -853,6 +855,11 @@ _TEXT_ONLY_CONTEXTS = frozenset(
     }
 )
 
+# Elements whose payload-bearing attribute the browser reads as markup: an
+# unquoted attribute value cannot carry one of these. A value in any *other*
+# attribute is text, and a page that keeps it there kept nothing executable.
+_MARKUP_ATTRIBUTES = frozenset({"src", "srcdoc", "href", "xlink:href", "style", "data"})
+
 
 async def _markup_reaches_the_page(
     client: HttpClient,
@@ -863,6 +870,7 @@ async def _markup_reaches_the_page(
     send,
     data: dict,
     log,
+    marker: str = "",
 ) -> bool:
     """Whether a tag written into *field* is still a tag on the page.
 
@@ -875,9 +883,14 @@ async def _markup_reaches_the_page(
     in the page. ``False`` is the measured answer — the page returned no tag at
     all, or returned this value as text. A read that failed, or a page that
     answers its read with no stored value, says nothing and keeps the claim too.
+
+    *marker* is minted per call unless the caller supplies one; a test needs to
+    know the value it is looking for.
     """
-    marker = f"ixp{hashlib.md5(f'{field}{time.time()}{url}'.encode()).hexdigest()[:8]}"
-    tag = f"<b>ixp</b>{marker}"
+    if not marker:
+        marker = f"ixp{hashlib.md5(f'{field}{time.time()}{url}'.encode()).hexdigest()[:8]}"
+    record_text = f"ixp{hashlib.md5(marker.encode()).hexdigest()[:6]}"
+    tag = f"<b>{record_text}</b>{marker}"
     saved = data.get(field)
     try:
         data[field] = tag
@@ -886,17 +899,15 @@ async def _markup_reaches_the_page(
             log(f"stored: markup probe refused status={st} field={field}", "debug")
             return True
         status, page, _h = await _render_one(client, url)
-        # A page that keeps the tag *and* this value has it whole. The bare tag
-        # also appears in the page's own markup, so the value is what is looked
-        # for after it: ``<b>ixp</b>`` followed by the marker, nothing between.
-        kept = bool(
-            re.search(
-                r"<(?:b|strong|i|em)\b[^<>]*>\s*ixp\s*</(?:b|strong|i|em)>\s*"
-                + re.escape(marker),
-                page or "",
-                re.I,
+        page = page or ""
+        if not _judged(page, marker):
+            log(
+                f"stored: markup probe field={field} status={status} "
+                f"value_on_page=False — nothing to judge",
+                "debug",
             )
-        )
+            return True
+        kept = _an_element_survives(page, marker, record_text)
         log(
             f"stored: markup probe field={field} status={status} "
             f"value_on_page={marker in (page or '')} tag_kept={kept}",
@@ -908,6 +919,73 @@ async def _markup_reaches_the_page(
             data.pop(field, None)
         else:
             data[field] = saved
+
+
+# An element the record's own text sits inside, immediately before the marker:
+# ``<b>ixp</b><marker>``, ``<strong class=x>ixp</strong><marker>``. The tag
+# itself is not pinned: a page that re-serialises the record may answer with
+# another formatting element, carry an attribute of its own, or wrap it — what
+# the probe asked was whether markup reached the parser at all.
+_ELEMENT_HOLDING_THE_PROBE = "ixp"
+
+
+def _judged(page: str, marker: str) -> bool:
+    """Whether *page* carries the value at all.
+
+    A page that answers its read with no stored value — a login redirect, an
+    empty listing — says nothing about what the page does with markup. Only a
+    page that shows the value can be read for a tag, so the caller keeps its
+    default claim when this is ``False``.
+    """
+    return bool(page and marker and marker in page)
+
+
+def _an_element_survives(page: str, marker: str, record_text: str = "") -> bool:
+    """Whether the record was written with markup that can still become markup.
+
+    The page is parsed, not grepped: a tag mentioned inside a script or quoted
+    as an attribute value was never markup, and a regular expression cannot tell
+    the two apart from a real element holding the probe's text.
+
+    Two answers count as kept, because both can still execute:
+
+    - An element whose own child text is the probe's text (*record_text*), with
+      the marker written after it. The tag is not pinned: a page that
+      re-serialises the record may answer with ``strong`` for the ``b`` it was
+      given, carry an attribute of its own, or wrap it.
+    - The record in an attribute the browser reads as markup — ``srcdoc``,
+      ``src``, ``style``. No element is created at parse time, but the value is
+      parsed as markup when the element is used.
+
+    Any other attribute holds text, whatever tag its value contains: a record
+    quoted into ``value="…"`` kept nothing executable.
+    """
+    if not page or not marker or marker not in page:
+        return False
+    soup = BeautifulSoup(page, "html.parser")
+    for tag in soup.find_all(True):
+        for name, value in tag.attrs.items():
+            if isinstance(value, (list, tuple)):
+                value = " ".join(str(v) for v in value)
+            if str(name).lower() in _MARKUP_ATTRIBUTES and marker in str(value):
+                return True
+        if not record_text:
+            continue
+        # The probe's text has to be an element's own child text, not its whole
+        # subtree: a paragraph holding the record would answer for a tag nested
+        # anywhere inside it.
+        if record_text not in "".join(
+            str(c) for c in tag.children if not getattr(c, "name", None)
+        ):
+            continue
+        # The marker was written after the element. A page that re-serialises
+        # the record keeps both under the same parent, so what follows the
+        # element among its siblings is where to look. Walking on past the
+        # parent would match any later occurrence of the word on the page.
+        tail = "".join(str(node) for node in tag.next_siblings)
+        if marker in tail:
+            return True
+    return False
 
 
 def _record_reaches_the_page(body: str, marker: str) -> bool:
