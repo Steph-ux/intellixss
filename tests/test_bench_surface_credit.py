@@ -185,9 +185,15 @@ def test_the_tracking_route_is_its_own_surface():
     assert not bench._on_sink(track, finding("id", f"{BASE}/?id=x", method="GET"))
 
 
-def test_a_hash_route_without_a_replay_shape_stays_browser_only():
+def test_a_hash_route_without_a_replay_shape_is_refused_not_credited():
+    """A fragment with no request behind it has no wire proof.
+
+    The browser may well have run the scanner's payload; nothing on the server
+    put it there. The replay says so explicitly and the surface is not
+    credited, instead of accepting "browser-only" as a proof.
+    """
     finding_ = finding("id", f"{BASE}/#/track-result?id=x", payload="<img src=x onerror=alert(`ixm00000000`)>", method="GET")
     out = bench.reproduce(BASE, {"key": "track", "field": "id"}, finding_, "")
-    assert out["dom"] is True
+    assert out["replayed"] is False
     assert out["status"] == 0
-    assert "browser-only" in out["note"]
+    assert "no wire request" in out["note"]

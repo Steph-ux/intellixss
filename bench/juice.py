@@ -492,6 +492,18 @@ def reproduce(base: str, surface: dict, finding: dict, token: str, account: dict
     # a handler the scanner made up.
     if (parsed.fragment or "").startswith("/"):
         replay = (surface or {}).get("replay") or ""
+        if not replay:
+            # No request is known to carry this route's value to the server,
+            # so nothing on the wire can be shown and the surface is not
+            # credited: a browser payload with no reachable sink is exactly the
+            # kind of claim this replay exists to refuse.
+            return {
+                "status": 0,
+                "echoed": False,
+                "stored": False,
+                "replayed": False,
+                "note": f"no wire request is known for route {parsed.fragment}",
+            }
         if replay and param == (surface.get("field") or param):
             # A ``:id`` segment carries the value in the path, which is where
             # the tracked id lives; the query string form would describe a
@@ -634,8 +646,10 @@ def write_report(rows: list, version: str, base: str) -> Path:
         if row is None:
             return "not run"
         own = row["findings"]
-        if any(f["verified_by"] == "browser" for f in own):
+        if confirmed(row):
             return "reproduced"
+        if any(f["verified_by"] == "browser" for f in own):
+            return "confirmed, no wire proof"
         if any(f["verified_by"] == "static" for f in own):
             return "static only"
         if any(f.get("type") == "reflection" for f in own):
@@ -644,8 +658,21 @@ def write_report(rows: list, version: str, base: str) -> Path:
             return "lead only"
         return "clean"
 
+    def proven(f: dict) -> bool:
+        """A browser finding whose value was also seen reaching the server.
+
+        The browser is the only oracle for a DOM sink, but a payload with no
+        wire proof describes a scan the harness invented — a route nothing
+        routes to, a request nothing makes. ``replay`` is absent when the run
+        was made with ``--no-replay``; an explicit abstention is what refuses.
+        """
+        replay = f.get("replay") or {}
+        return replay.get("replayed") is not False
+
     def confirmed(row: dict) -> list:
-        return [f for f in row.get("findings", []) if f["verified_by"] == "browser"]
+        return [
+            f for f in row.get("findings", []) if f["verified_by"] == "browser" and proven(f)
+        ]
 
     def graded_surface(c: dict) -> str:
         """The surface the challenge table grades, and whether it was reached.
@@ -822,7 +849,9 @@ def write_report(rows: list, version: str, base: str) -> Path:
             add(f"- Type: `{f['type']}`")
             add(f"- Payload: `{f['payload']}`")
             replay = f.get("replay") or {}
-            if replay.get("status"):
+            if f.get("replay") and not proven(f):
+                add(f"- Replay: refused, `{replay.get('note', '')}`")
+            elif replay.get("status"):
                 add(
                     f"- Replay: HTTP `{replay.get('status', 0)}`, "
                     f"echoed `{str(replay.get('echoed', False)).lower()}`, "
@@ -982,6 +1011,11 @@ async def main() -> None:
         1
         for r in rows
         if r["key"] in challenged
+        and all(
+            (f.get("replay") or {}).get("replayed") is not False
+            for f in r["findings"]
+            if f["verified_by"] == "browser"
+        )
         and any(f["verified_by"] == "browser" for f in r["findings"])
     )
     print(f"\nresults -> benchmark/juiceshop.json")
