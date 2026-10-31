@@ -49,6 +49,7 @@ CHALLENGES = [
         "key": "restfulXssChallenge",
         "name": "API-only XSS",
         "surface": "",
+        "reachable": "`PUT /rest/products/1/reviews`",
         "why": "needs a review submitted through the API instead of the dialog's form; "
         "the scanner drives what the page renders, and the product dialog in 20.3.0 "
         "puts the review text in a plain property binding, so it is never parsed as "
@@ -59,6 +60,7 @@ CHALLENGES = [
         "key": "usernameXssChallenge",
         "name": "CSP Bypass",
         "surface": "",
+        "reachable": "`POST /profile`",
         "literal": "<script>alert(`xss`)</script>",
         "why": "needs an account whose username is rendered on the legacy Pug profile "
         "under a CSP the challenge rewards rewriting; the bench registers accounts, "
@@ -102,12 +104,14 @@ CHALLENGES = [
         "key": "videoXssChallenge",
         "name": "Video XSS",
         "surface": "",
+        "reachable": "admin-only promo video URL",
         "why": "needs an administrator to change the promo video URL.",
     },
     {
         "key": "xssBonusChallenge",
         "name": "Bonus Payload",
         "surface": "",
+        "reachable": "`GET /#/search?q=`",
         "why": "shares the DOM XSS sink but requires one exact SoundCloud iframe; "
         "the scanner proves the sink, not the challenge's payload.",
     },
@@ -634,6 +638,28 @@ def write_report(rows: list, version: str, base: str) -> Path:
     def confirmed(row: dict) -> list:
         return [f for f in row.get("findings", []) if f["verified_by"] == "browser"]
 
+    def graded_surface(c: dict) -> str:
+        """The surface the challenge table grades, and whether it was reached.
+
+        A challenge can be about a surface that was scanned even when its sink
+        was reached on another one: ``restfulXssChallenge`` is stored through
+        its API and rendered by the product dialog, which is the ``reviews``
+        surface, not the one that renders the stored username.
+        """
+        reachable = (c.get("reachable") or "").strip()
+        if reachable:
+            return reachable
+        return "not reached"
+
+    def challenge_verdict(c: dict) -> tuple[str, str]:
+        """(sink cell, result cell) for one documented challenge."""
+        surface_key = c.get("surface") or ""
+        reachable = graded_surface(c)
+        if not surface_key:
+            return reachable, "not reached"
+        result = verdict(surface_key)
+        return sink_label(surface_key), result
+
     def finding_label(f: dict) -> str:
         """The sink a finding was made on, with the route when it is in the fragment."""
         parsed = urllib.parse.urlparse(f["url"])
@@ -693,10 +719,8 @@ def write_report(rows: list, version: str, base: str) -> Path:
     add("| Challenge | Key | Sink | Result |")
     add("|---|---|---|---|")
     for c in CHALLENGES:
-        sink = c["surface"]
-        where = sink_label(sink) if sink else "not reached"
-        result = verdict(sink) if sink else "not reached"
-        if sink and c.get("literal"):
+        where, result = challenge_verdict(c)
+        if c.get("surface") and c.get("literal"):
             result = f"{result}; challenge itself needs the literal `{c['literal']}`" if result == "reproduced" else result
         add(f"| {c['name']} | `{c['key']}` | {where} | {result} |")
     add("")
@@ -713,9 +737,9 @@ def write_report(rows: list, version: str, base: str) -> Path:
     add(
         f"{len(documented_clean)} documented "
         f"challenge{'s' if len(documented_clean) != 1 else ''} reported clean, and "
-        f"{len(not_reached)} "
-        f"{'were' if len(not_reached) != 1 else 'was'} not reached by this roster "
-        "(see below)."
+        f"{len(not_reached)} met the roster's bar for a challenge "
+        "(see below). Each of those names the sink it is about, so a row marked "
+        "\"not reached\" is a statement about that sink, not about the roster."
     )
     if documented_clean:
         names = ", ".join(f"`{c['key']}`" for c in documented_clean)
@@ -792,7 +816,7 @@ def write_report(rows: list, version: str, base: str) -> Path:
             elif replay:
                 add(f"- Replay: {replay.get('note', 'not replayed')}")
             add("")
-    add("## Not reached, and why")
+    add("## Not reached by the roster, and why")
     add("")
     for c in CHALLENGES:
         if c["surface"]:

@@ -16,15 +16,15 @@ while sending its own payload, which is what a scan is for.
 
 | Challenge | Key | Sink | Result |
 |---|---|---|---|
-| API-only XSS | `restfulXssChallenge` | not reached | not reached |
-| CSP Bypass | `usernameXssChallenge` | not reached | not reached |
+| API-only XSS | `restfulXssChallenge` | `PUT /rest/products/1/reviews` | not reached |
+| CSP Bypass | `usernameXssChallenge` | `POST /profile` | not reached |
 | Client-side XSS Protection | `persistedXssUserChallenge` | `POST /profile` | reproduced; challenge itself needs the literal `<iframe src="javascript:alert(`xss`)">` |
 | DOM XSS | `localXssChallenge` | `GET /#/search?q=` | reproduced |
 | HTTP-Header XSS | `httpHeaderXssChallenge` | `GET /#/privacy-security/last-login-ip` via `localStorage` | reproduced |
 | Reflected XSS | `reflectedXssChallenge` | `GET /#/track-result?id=` | reproduced |
 | Server-side XSS Protection | `persistedXssFeedbackChallenge` | `POST /api/Feedbacks` | clean |
-| Video XSS | `videoXssChallenge` | not reached | not reached |
-| Bonus Payload | `xssBonusChallenge` | not reached | not reached |
+| Video XSS | `videoXssChallenge` | admin-only promo video URL | not reached |
+| Bonus Payload | `xssBonusChallenge` | `GET /#/search?q=` | not reached |
 
 The profile surface is credited for its sink, not for the challenge: the
 scanner confirms that a stored username reaches a sink that executes its
@@ -33,7 +33,7 @@ seeing one exact injected value. The same holds for the search surface
 and the bonus payload.
 
 4 of 9 documented XSS challenges reproduced automatically.
-1 documented challenge reported clean, and 4 were not reached by this roster (see below).
+1 documented challenge reported clean, and 4 met the roster's bar for a challenge (see below). Each of those names the sink it is about, so a row marked "not reached" is a statement about that sink, not about the roster.
 
 A clean result is the expected answer for `persistedXssFeedbackChallenge`: the sink is behind
 `sanitize-html` with its default allow-list, so the payload is stored as
@@ -121,7 +121,7 @@ about a header, that header. No payload is pre-written by the harness.
 - Payload: `<img src=x onerror=alert('ixmd1c4eda3')>`
 - Replay: HTTP `200`, echoed `true`, stored `true`
 
-## Not reached, and why
+## Not reached by the roster, and why
 
 - **API-only XSS** (`restfulXssChallenge`): needs a review submitted through the API instead of the dialog's form; the scanner drives what the page renders, and the product dialog in 20.3.0 puts the review text in a plain property binding, so it is never parsed as markup. The server-side sink is real; reaching it means posting the review the page itself does not post.
 - **CSP Bypass** (`usernameXssChallenge`): needs an account whose username is rendered on the legacy Pug profile under a CSP the challenge rewards rewriting; the bench registers accounts, but the challenge is solved by one exact stored value, not by proving the renderer executes what it is given.
