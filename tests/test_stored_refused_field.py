@@ -168,3 +168,55 @@ def test_a_kept_record_is_measured_with_every_payload():
     findings = stored(site)
     assert site.writes > 1
     assert findings, "a page that renders the record is a sink"
+
+
+def test_a_handler_with_no_form_is_still_written_through():
+    """A write is a write whether or not the page carries a form for it.
+
+    The reviews API stores a message on ``PUT /rest/products/1/reviews`` and the
+    shop's product dialog renders it; the page offers no form, so finding the
+    handler's shape from markup finds nothing, and the handler the caller named
+    is written through as it is. This pins that the pass does not quietly fall
+    back to ``POST`` when no form is found: a ``POST`` to that handler is a
+    different request the application answers with ``404``, and every payload
+    would then be measured against a page that never received one.
+    """
+
+    class _Api:
+        def __init__(self):
+            self.record = ""
+            self.methods = []
+
+        async def request(self, method, url, **kw):
+            self.methods.append(method.upper())
+            if method.upper() == "GET":
+                shown = f'<div class="review">{self.record}</div>' if self.record else ""
+                return 200, f"<html><body>{shown}</body></html>", {}, url
+            body = dict(kw.get("json_body") or kw.get("data") or {})
+            self.record = body.get("message", "")
+            return 201, '{"status":"success"}', {}, url
+
+        async def inject(self, url, field, value, method="GET", base_data=None):
+            body = dict(base_data or {})
+            body[field] = value
+            return await self.request(method, url, data=body)
+
+        async def inject_json(self, url, field, value, base=None, method="POST"):
+            body = dict(base or {})
+            body[field] = value
+            return await self.request(method, url, json_body=body)
+
+    api = _Api()
+    findings = asyncio.run(
+        scan_server_stored(
+            api,
+            "http://shop.test/rest/products/1/reviews",
+            field="message",
+            method="PUT",
+            base_data={},
+            render_urls=["http://shop.test/"],
+            browser=None,
+        )
+    )
+    assert "PUT" in api.methods, api.methods
+    assert findings, "the handler stores the record, so the page that renders it is a sink"

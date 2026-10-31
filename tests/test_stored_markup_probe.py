@@ -17,6 +17,8 @@ from __future__ import annotations
 import asyncio
 import hashlib
 
+from bs4 import BeautifulSoup
+
 import intellixss.plugins.stored_xss as mod
 
 MARKER = "ixpABC123"
@@ -153,6 +155,32 @@ def test_a_record_on_the_page_is_read_by_its_own_word():
 
 def test_the_word_tag_inside_a_string_is_not_a_kept_tag():
     assert not probes(f'<script>var x = "<b>{WORD}</b>{MARKER}"</script>')
+
+
+def test_src_is_markup_on_the_elements_that_parse_a_document():
+    """The same attribute, two meanings, decided by the element.
+
+    ``iframe src`` names a document the browser parses and ``srcdoc`` a string
+    it parses, so both carry markup. Reading ``src`` as a URL everywhere would
+    refuse a frame that renders the record; reading it as markup everywhere
+    kept a profile picture's URL live.
+    """
+
+    def markup(name: str, tag_name: str) -> bool:
+        soup = BeautifulSoup(f"<{tag_name} {name}=x>", "html.parser")
+        return mod._read_as_markup(soup.find(True), name)
+
+    assert markup("srcdoc", "iframe")
+    assert markup("src", "iframe")
+    assert markup("src", "frame")
+    assert markup("src", "object")
+    assert markup("style", "div")
+    assert markup("href", "a")
+    assert not markup("src", "img")
+    assert not markup("src", "script")
+    assert not markup("src", "video")
+    assert not markup("title", "a")
+    assert not markup("alt", "img")
 
 
 def test_the_word_tag_in_an_attribute_is_not_a_kept_tag():

@@ -1025,14 +1025,13 @@ _TEXT_ONLY_CONTEXTS = frozenset(
 # unquoted attribute value cannot carry one of these. A value in any *other*
 # attribute is text, and a page that keeps it there kept nothing executable.
 #
-# The name alone is not enough for ``src``: the same attribute is a document
-# for ``iframe`` and a URL for the elements below. A browser fetches what an
-# ``img`` names in ``src`` and parses nothing, so a record confined to a profile
-# picture's URL is text as far as execution is concerned.
+# ``src`` is not one of them by name alone: the same attribute is a document
+# for a frame and a URL for an image. A browser fetches what an ``img`` names in
+# ``src`` and parses nothing, so a record confined to a profile picture's URL is
+# text as far as execution is concerned. The elements that parse a document
+# from ``src`` are named here, and :func:`_read_as_markup` decides.
 _MARKUP_ATTRIBUTES = frozenset({"href", "xlink:href", "data"})
-_NON_MARKUP_SRC_TAGS = frozenset(
-    {"img", "script", "iframe", "input", "audio", "video", "source", "track", "embed"}
-)
+_DOCUMENT_SRC_TAGS = frozenset({"frame", "iframe", "object", "embed"})
 
 
 def _read_as_markup(tag, name: str) -> bool:
@@ -1041,15 +1040,15 @@ def _read_as_markup(tag, name: str) -> bool:
     ``srcdoc`` and ``style`` are markup wherever they appear. ``href``,
     ``data`` and ``xlink:href`` are read as URLs and count as markup only
     outside the elements that treat them as an address. ``src`` follows the
-    element: a document for ``frame``, ``iframe`` and ``object``, a URL for
-    everything else that carries one.
+    element: a document for ``frame``, ``iframe``, ``object`` and ``embed``, a
+    URL for everything else that carries one.
     """
     name = name.lower()
     tag_name = getattr(tag, "name", "").lower()
     if name == "srcdoc" or name == "style":
         return True
     if name == "src":
-        return tag_name not in _NON_MARKUP_SRC_TAGS
+        return tag_name in _DOCUMENT_SRC_TAGS
     return name in _MARKUP_ATTRIBUTES
 
 
@@ -1082,10 +1081,10 @@ async def _markup_reaches_the_page(
     if not marker:
         marker = f"ixp{hashlib.md5(f'{field}{time.time()}{url}'.encode()).hexdigest()[:8]}"
     record_text = _probe_word(marker)
-    # The record names its own word. A later probe writes a second record to
-    # the same page, and the first one is still there: matching whichever word
-    # comes first answers about the wrong record. ``bgt`` is not a hex digit,
-    # so the word this probe wrote is the only one the shape can find.
+    # The record names its own word: the marker, then ``w`` and the word's
+    # digits. A later probe writes a second record to the same page while the
+    # first one is still there, and without that trail whichever word came first
+    # answered for both.
     tag = f"<b>{record_text}</b>{marker}w{record_text[3:]}"
     saved = data.get(field)
     try:
@@ -1120,13 +1119,6 @@ async def _markup_reaches_the_page(
         else:
             data[field] = saved
 
-
-# An element the record's own text sits inside, immediately before the marker:
-# ``<b>ixp</b><marker>``, ``<strong class=x>ixp</strong><marker>``. The tag
-# itself is not pinned: a page that re-serialises the record may answer with
-# another formatting element, carry an attribute of its own, or wrap it — what
-# the probe asked was whether markup reached the parser at all.
-_ELEMENT_HOLDING_THE_PROBE = "ixp"
 
 def _probe_word(marker: str) -> str:
     """The text the probe places inside its element, derived from *marker*.
