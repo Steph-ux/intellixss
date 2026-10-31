@@ -20,7 +20,9 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import html
 import json
+import re
 import sys
 import time
 import urllib.error
@@ -46,22 +48,29 @@ CHALLENGES = [
     {
         "key": "restfulXssChallenge",
         "name": "API-only XSS",
-        "surface": "reviews",
-        "why": "",
+        "surface": "",
+        "why": "needs a review submitted through the API instead of the dialog's form; "
+        "the scanner drives what the page renders, and the product dialog in 20.3.0 "
+        "puts the review text in a plain property binding, so it is never parsed as "
+        "markup. The server-side sink is real; reaching it means posting the review "
+        "the page itself does not post.",
     },
     {
         "key": "usernameXssChallenge",
         "name": "CSP Bypass",
         "surface": "",
-        "why": "needs an account whose username is rendered on a legacy page under CSP; "
-        "the roster does not register users.",
+        "literal": "<script>alert(`xss`)</script>",
+        "why": "needs an account whose username is rendered on the legacy Pug profile "
+        "under a CSP the challenge rewards rewriting; the bench registers accounts, "
+        "but the challenge is solved by one exact stored value, not by proving the "
+        "renderer executes what it is given.",
     },
     {
         "key": "persistedXssUserChallenge",
         "name": "Client-side XSS Protection",
-        "surface": "",
-        "why": "needs a registered user's username persisted and a client-side "
-        "sanitizer bypass; the roster does not register users.",
+        "surface": "profile",
+        "literal": "<iframe src=\"javascript:alert(`xss`)\">",
+        "why": "",
     },
     {
         "key": "localXssChallenge",
@@ -72,16 +81,18 @@ CHALLENGES = [
     {
         "key": "httpHeaderXssChallenge",
         "name": "HTTP-Header XSS",
-        "surface": "",
-        "why": "the sink is a request header persisted and rendered in the admin "
-        "area; no surface sends attacker-controlled headers.",
+        "surface": "last-login-ip",
+        "why": "",
     },
     {
         "key": "reflectedXssChallenge",
         "name": "Reflected XSS",
         "surface": "",
         "why": "the order-tracking page reflects the id returned by its API; the "
-        "roster does not drive that page with a live order.",
+        "roster does not drive that page with a live order. During every scan the "
+        "route did confirm an executing payload for a direct "
+        "`#/track-result?id=` navigation, but that route is not what the challenge "
+        "turns on, so it is not credited here.",
     },
     {
         "key": "persistedXssFeedbackChallenge",
@@ -138,7 +149,8 @@ SURFACES = [
         "field": "message",
         "method": "PUT",
         "note": "`PUT /rest/products/1/reviews` stores `message` verbatim, with no "
-        "authentication; the value is rendered back on the product page.",
+        "authentication; the Angular template writes it into the product dialog, "
+        "which 20.3.0 opens from the `#/search` grid rather than a route of its own.",
     },
     {
         "key": "feedback",
@@ -160,6 +172,33 @@ SURFACES = [
         "hands out; the message is stored and shown back to the user.",
     },
     {
+        "key": "last-login-ip",
+        "challenge": "httpHeaderXssChallenge",
+        "page": "/#/privacy-security/last-login-ip",
+        "endpoint": "/rest/saveLoginIp",
+        "route": "/privacy-security/last-login-ip",
+        "field": "True-Client-IP",
+        "method": "GET",
+        "header": {"True-Client-IP": "IntelliXSS-bench"},
+        "needs_account": True,
+        "note": "`GET /rest/saveLoginIp` stores the `True-Client-IP` header on the "
+        "session's user; `last-login-ip` decodes the token out of `localStorage` and "
+        "writes it through `bypassSecurityTrustHtml`. The header below is a probe, not "
+        "the payload: the scanner has to discover the stored header and confirm it.",
+    },
+    {
+        "key": "profile",
+        "challenge": "usernameXssChallenge",
+        "page": "/profile",
+        "endpoint": "/profile",
+        "field": "username",
+        "method": "POST",
+        "needs_account": True,
+        "note": "The legacy Pug profile page renders the stored username with a "
+        "homegrown regex sanitizer behind a CSP the same profile can rewrite through "
+        "the image URL.",
+    },
+    {
         "key": "login",
         "page": "/",
         "endpoint": "/rest/user/login",
@@ -171,15 +210,34 @@ SURFACES = [
 ]
 
 
-def request(base: str, path: str, method: str = "GET", body=None, token: str = "") -> tuple[int, str, str]:
-    """(status, body, headers) for one request. HTTP errors are returned, not raised."""
+def request(
+    base: str,
+    path: str,
+    method: str = "GET",
+    body=None,
+    token: str = "",
+    form: bool = False,
+    cookie: str = "",
+) -> tuple[int, str, str]:
+    """(status, body, headers) for one request. HTTP errors are returned, not raised.
+
+    *form* sends the body as ``application/x-www-form-urlencoded`` — the shape a
+    server-rendered HTML form posts — and *cookie* adds a session cookie, which
+    a login-bound form reads instead of the bearer plane.
+    """
     headers = dict(UA)
     data = None
     if body is not None:
-        headers["Content-Type"] = "application/json"
-        data = json.dumps(body).encode("utf-8")
+        if form:
+            headers["Content-Type"] = "application/x-www-form-urlencoded"
+            data = urllib.parse.urlencode(body).encode("utf-8")
+        else:
+            headers["Content-Type"] = "application/json"
+            data = json.dumps(body).encode("utf-8")
     if token:
         headers["Authorization"] = f"Bearer {token}"
+    if cookie:
+        headers["Cookie"] = cookie
     req = urllib.request.Request(base + path, data=data, headers=headers, method=method)
     try:
         r = urllib.request.urlopen(req, timeout=20)
@@ -215,6 +273,45 @@ def login(base: str) -> str:
         return ""
 
 
+def register(base: str, tag: str) -> dict:
+    """A throwaway account registered through the application's own signup.
+
+    The harness supplies an *identity*, never a payload: it asks the public
+    signup for an ordinary account and hands the scanner that session. Whatever
+    ends up stored under it is what the scanner submitted itself.
+    """
+    email = f"ixss-{tag}@bench.invalid"
+    password = f"Bench!{tag}Pass"
+    status, _body, _h = request(
+        base,
+        "/api/Users",
+        "POST",
+        {
+            "email": email,
+            "password": password,
+            "passwordRepeat": password,
+            "securityQuestion": {"id": 1},
+            "securityAnswer": "bench",
+        },
+    )
+    if status not in (200, 201):
+        return {}
+    token = login_as(base, email, password)
+    return {"email": email, "password": password, "token": token} if token else {}
+
+
+def login_as(base: str, email: str, password: str) -> str:
+    status, body, _h = request(
+        base, "/rest/user/login", "POST", {"email": email, "password": password}
+    )
+    if status != 200:
+        return ""
+    try:
+        return json.loads(body)["authentication"]["token"]
+    except (KeyError, ValueError):
+        return ""
+
+
 def captcha(base: str) -> dict:
     """The captcha the server issues, with the answer it is willing to give.
 
@@ -238,14 +335,35 @@ def requests_marker(text: str) -> str:
     return m.group(0) if m else ""
 
 
-async def scan_surface(base: str, surface: dict, browser: bool, token: str) -> dict:
+async def scan_surface(
+    base: str,
+    surface: dict,
+    browser: bool,
+    token: str,
+    account: dict | None = None,
+) -> dict:
     """Scan one surface with the stock configuration and return its findings."""
     cfg = Config(guess_params=True, use_browser=browser)
+    auth = AuthConfig()
     if token:
         # The complaint form sits behind a session. The scanner's own bearer
         # plane carries the same token into its HTTP client and its browser, so
         # a scan of that form sees it as a logged-in user does.
-        cfg.auth = AuthConfig(bearer=token)
+        auth.bearer = token
+    if account:
+        # A surface may need its own identity — an account whose stored record
+        # carries the payload. This is the account the harness registered, not
+        # a credential it injected into the database.
+        auth.bearer = account.get("token") or auth.bearer
+        auth.cookie = f"token={account['token']}" if account.get("token") else ""
+    header = surface.get("header") or {}
+    if header:
+        # The harness supplies an attacker-controlled header, exactly as a
+        # proxy in front of the application would forward one. The scanner
+        # still has to find the sink that stores it and confirm execution.
+        auth.headers.update({str(k): str(v) for k, v in header.items()})
+    if auth.bearer or auth.cookie or auth.headers:
+        cfg.auth = auth
     s = Scanner(cfg)
     s._mute = True
     started = time.time()
@@ -289,7 +407,42 @@ async def scan_surface(base: str, surface: dict, browser: bool, token: str) -> d
     return result
 
 
-def reproduce(base: str, surface: dict, finding: dict, token: str) -> dict:
+def _form_body(key: str, payload: str, account: dict, base: str = "") -> dict | None:
+    """The wire body that writes *payload* through surface *key*.
+
+    Each surface is one form. Rebuilding it here keeps the replay independent
+    of which handler the scan happened to report, and makes the shape explicit
+    enough that a changed one is a visible edit rather than a silent guess.
+    ``None`` means the surface has no known write shape.
+    """
+    if key == "feedback":
+        cap = captcha(base) if base else {}
+        return {
+            "comment": payload,
+            "rating": 1,
+            "captchaId": cap.get("captchaId"),
+            "captcha": cap.get("answer"),
+        }
+    if key == "complaints":
+        return {"message": payload}
+    if key == "reviews":
+        return {"message": payload, "author": "admin@juice-sh.op"}
+    if key == "profile":
+        # The rendered form's own fields, and only those. The image URL is
+        # omitted rather than sent empty: an empty value is stored as such and
+        # makes the model overwrite an admin's picture, which fails the write.
+        # The email is the identity's own, because the handler updates the
+        # account it is authenticated as and reads that address back.
+        body = {"username": payload}
+        if account.get("email"):
+            body["email"] = account["email"]
+        return body
+    if key == "login":
+        return {"email": payload, "password": "intellixss-not-a-password"}
+    return None
+
+
+def reproduce(base: str, surface: dict, finding: dict, token: str, account: dict | None = None) -> dict:
     """Replay a finding with its own payload and report what came back.
 
     This is the check that makes the report trustworthy: the scanner's claim
@@ -299,12 +452,20 @@ def reproduce(base: str, surface: dict, finding: dict, token: str) -> dict:
     """
     payload = finding["payload"]
     param = finding["param"]
-    method = surface.get("method", "GET")
+    # The method the finding reported, falling back to the surface's. A form
+    # surface is only scanned to reach every sink on its page, and the sink it
+    # is graded on may be found by a GET even though its own write is a POST.
+    method = finding.get("method") or surface.get("method", "GET")
     parsed = urllib.parse.urlparse(finding.get("url", ""))
     sink = parsed.path
     # A hash route never reaches the server: replaying it over HTTP returns the
     # application shell and says nothing about the payload. The browser is the
     # only oracle for that finding, and it already ran during the scan.
+    # An endpoint finding is replayed by putting its value on the wire again. A
+    # page finding — a hash route, or a browser-owned store — has nothing to put
+    # on the wire: the browser is the only oracle, and it already ran during the
+    # scan. Saying so is more honest than replaying a page and reporting the
+    # status of an unrelated request.
     if (parsed.fragment or "").startswith("/"):
         return {
             "status": 0,
@@ -312,7 +473,16 @@ def reproduce(base: str, surface: dict, finding: dict, token: str) -> dict:
             "stored": False,
             "dom": True,
             "marker": finding.get("marker") or requests_marker(payload),
-            "note": "hash route — execution is browser-only",
+            "note": "hash route: execution is browser-only",
+        }
+    if param.startswith(("localStorage", "sessionStorage", "document.", "window.")):
+        return {
+            "status": 0,
+            "echoed": False,
+            "stored": False,
+            "dom": True,
+            "marker": finding.get("marker") or requests_marker(payload),
+            "note": f"{param} is planted in the browser: execution is browser-only",
         }
     # The endpoint the *finding* names is the one that has to be replayed, not
     # the surface's nominal endpoint: a scan of ``/`` reports sinks the surface
@@ -322,21 +492,26 @@ def reproduce(base: str, surface: dict, finding: dict, token: str) -> dict:
     body = None
     if method == "GET":
         path = f"{path}?{urllib.parse.urlencode({param: payload})}" if "?" not in path else path
-    elif surface["key"] == "feedback":
-        cap = captcha(base)
-        body = {
-            "comment": payload,
-            "rating": 1,
-            "captchaId": cap.get("captchaId"),
-            "captcha": cap.get("answer"),
+    else:
+        body = _form_body(surface["key"], payload, account or {}, base)
+    if method != "GET" and body is None:
+        # Nothing is known about how this handler takes input. Posting a guess
+        # and reporting its status would describe a request the application
+        # never receives, so the replay abstains instead.
+        return {
+            "status": 0,
+            "echoed": False,
+            "stored": False,
+            "replayed": False,
+            "note": f"no replay shape for {surface['key']}",
         }
-    elif surface["key"] == "complaints":
-        body = {"message": payload}
-    elif surface["key"] == "reviews":
-        body = {"message": payload, "author": "admin@juice-sh.op"}
-    elif surface["key"] == "login":
-        body = {"email": payload, "password": "intellixss-not-a-password"}
-    status, text, _h = request(base, path, method, body, token)
+    # A server-rendered form authenticates on the session cookie and posts
+    # urlencoded fields; an API surface takes JSON and the bearer plane. Sending
+    # one shape at the other is how a replay reports a failure the application
+    # never caused.
+    form = surface["key"] == "profile"
+    cookie = f"token={token}" if form and token else ""
+    status, text, _h = request(base, path, method, body, token, form=form, cookie=cookie)
     marker = finding.get("marker") or requests_marker(payload)
     echoed = bool(marker) and marker in text
     # A stored payload is not in this response; it is in the collection the
@@ -351,6 +526,13 @@ def reproduce(base: str, surface: dict, finding: dict, token: str) -> dict:
         if listing:
             _st, listed, _lh = request(base, listing, "GET", None, token)
             stored = marker in listed
+        elif surface["key"] == "profile" and token:
+            # The write answers with the profile page it redirects to, and the
+            # username input carries the stored value. The markup is the page's
+            # own, so the replay reports whether the account *holds* the value.
+            _st, page, _mh = request(base, "/profile", "GET", None, token, cookie=cookie)
+            hit = re.search(r'id="username"[^>]*value="([^"]*)"', page or "")
+            stored = bool(hit) and payload in html.unescape(hit.group(1))
     return {"status": status, "echoed": echoed, "stored": stored, "marker": marker}
 
 
@@ -370,10 +552,22 @@ def _on_sink(surface: dict, finding: dict) -> bool:
     parsed = urllib.parse.urlparse(finding.get("url", ""))
     route = (surface or {}).get("route") or ""
     if route:
+        # A finding on another route is another component, whatever field it
+        # names: ``q`` on ``#/search`` is not the sink this surface is about.
         fragment = parsed.fragment or ""
         fragment_path = "/" + fragment.lstrip("/").split("?")[0].strip("/")
-        if fragment_path.rstrip("/") == route.rstrip("/"):
-            return True
+        if fragment_path.rstrip("/") != route.rstrip("/"):
+            return False
+    # A finding is credited to a surface only for the field that surface is
+    # about — or for the browser-owned source it names, which is a source and
+    # not a parameter of the endpoint. Every other field of the same handler
+    # belongs to some other sink.
+    field = (surface or {}).get("field") or ""
+    param = finding.get("param") or ""
+    if field and param != field and not param.startswith(("localStorage", "sessionStorage", "document.", "window.")):
+        return False
+    if route:
+        return True
     want = urllib.parse.urlparse(endpoint).path.rstrip("/")
     got = parsed.path.rstrip("/")
     if want == got:
@@ -424,7 +618,14 @@ def write_report(rows: list, version: str, base: str) -> Path:
             return "not run"
         hits = confirmed(row)
         if hits:
-            return finding_label(hits[0])
+            f = hits[0]
+            # A sink fed by a browser-owned source has no parameter in the
+            # route: naming one would claim a request shape that never fired.
+            if f["param"].startswith(("localStorage", "sessionStorage", "document.", "window.")):
+                parsed = urllib.parse.urlparse(f["url"])
+                route = "/" + (parsed.fragment or "").lstrip("/").split("?")[0].strip("/")
+                return f"`GET /#{route}` via `{f['param']}`"
+            return finding_label(f)
         surface = row.get("surface", {})
         endpoint = surface.get("endpoint") or surface.get("page", "")
         return f"`{surface.get('method', 'GET')} {endpoint}`"
@@ -454,13 +655,26 @@ def write_report(rows: list, version: str, base: str) -> Path:
     add("The nine entries of `data/static/challenges.yml` whose category is `XSS`.")
     add("A challenge counts as reproduced when the scanner confirms, in a browser,")
     add("an executing payload on the sink that challenge is about.")
+    add("Reaching a sink is not the same as solving what the challenge asks: a few")
+    add("of them are solved by the *server* recognising one exact injected value.")
+    add("Those are marked separately, because the scanner proves the sink executes")
+    add("while sending its own payload, which is what a scan is for.")
     add("")
     add("| Challenge | Key | Sink | Result |")
     add("|---|---|---|---|")
     for c in CHALLENGES:
         sink = c["surface"]
         where = sink_label(sink) if sink else "not reached"
-        add(f"| {c['name']} | `{c['key']}` | {where} | {verdict(sink) if sink else 'not reached'} |")
+        result = verdict(sink) if sink else "not reached"
+        if sink and c.get("literal"):
+            result = f"{result}; challenge itself needs the literal `{c['literal']}`" if result == "reproduced" else result
+        add(f"| {c['name']} | `{c['key']}` | {where} | {result} |")
+    add("")
+    add("The profile surface is credited for its sink, not for the challenge: the")
+    add("scanner confirms that a stored username reaches a sink that executes its")
+    add("own `<img onerror>` payload, while the challenge is solved by the server")
+    add("seeing one exact injected value. The same holds for the search surface")
+    add("and the bonus payload.")
     add("")
     add(
         f"{len(reproduced)} of {len(CHALLENGES)} documented XSS challenges reproduced "
@@ -489,6 +703,29 @@ def write_report(rows: list, version: str, base: str) -> Path:
             add(f"- `{f['method']} {urllib.parse.urlparse(f['url']).path}` "
                 f"(`{f['param']}`, {f['type']}) on the `{key}` surface")
     add("")
+    add("## Session material supplied by the harness")
+    add("")
+    add("A scan of an anonymous page cannot reach a sink that is only stored for")
+    add("a logged-in user, or fed by a header the page never sends. For those")
+    add("surfaces the harness supplies *identity and transport only*: a throwaway")
+    add("account registered through `POST /api/Users`, and where a surface is")
+    add("about a header, that header. No payload is pre-written by the harness.")
+    add("")
+    add("| Surface | Session | Supplied |")
+    add("|---|---|---|")
+    for row in rows:
+        supplied = []
+        if row.get("session") == "account":
+            supplied.append("throwaway account")
+        elif row.get("session") == "shared":
+            supplied.append("admin bearer")
+        for name in (row.get("surface", {}).get("header") or {}):
+            supplied.append(f"header `{name}`")
+        add(
+            f"| {row['key']} | {row.get('session', 'none')} | "
+            f"{', '.join(supplied) or 'nothing'} |"
+        )
+    add("")
     add("## Surfaces")
     add("")
     add("| Surface | Pointed at | Sink | Verdict | Confirmed | Requests | Time |")
@@ -515,7 +752,7 @@ def write_report(rows: list, version: str, base: str) -> Path:
             add(f"- Payload: `{f['payload']}`")
             replay = f.get("replay") or {}
             if replay.get("dom"):
-                add("- Replay: hash route, execution is browser-only")
+                add(f"- Replay: {replay.get('note', 'browser-only')}")
             elif replay:
                 add(
                     f"- Replay: HTTP `{replay.get('status', 0)}`, "
@@ -544,6 +781,16 @@ async def main() -> None:
     args = ap.parse_args()
     base = args.base.rstrip("/")
 
+    if not args.no_replay:
+        # Every capture points the scanner at a page whose server-side state is
+        # the seed data. Replaying a finding would otherwise add one more record
+        # to a store the next run also reads, so the run says what it wrote and
+        # leaves the reset to the operator (``bench/reset-shop.ps1``).
+        print(
+            "note: this run writes records to the shop; reset it before re-measuring",
+            flush=True,
+        )
+
     if args.list:
         for s in SURFACES:
             print(f"{s['key']:12} {s.get('method', 'GET'):5} {s['page']}")
@@ -566,7 +813,17 @@ async def main() -> None:
     rows = []
     for surface in wanted:
         print(f"\n[{surface['key']}] {surface.get('method', 'GET')} {surface['page']}", flush=True)
-        row = await scan_surface(base, surface, not args.no_browser, token)
+        account = {}
+        if surface.get("needs_account"):
+            # A distinct identity per surface, so one surface's stored record
+            # cannot make the next one look exploitable.
+            account = register(base, f"{surface['key']}-{int(time.time())}")
+            print(
+                f"  account: {'registered' if account else 'unavailable'}",
+                flush=True,
+            )
+        row = await scan_surface(base, surface, not args.no_browser, token, account)
+        row["session"] = "account" if account else ("shared" if token else "none")
         # The scan of ``/`` reports every sink the bundle exposes, once per
         # surface. A surface's verdict is about *its* sink: a finding on
         # ``/api/Feedbacks`` is not evidence about the review endpoint.
@@ -584,7 +841,7 @@ async def main() -> None:
         if not args.no_replay:
             for f in own:
                 if f["verified_by"] in ("browser", "static", "reflection"):
-                    f["replay"] = reproduce(base, surface, f, token)
+                    f["replay"] = reproduce(base, surface, f, account.get("token") or token, account)
         row["surface"] = {k: v for k, v in surface.items()}
         rows.append(row)
 
