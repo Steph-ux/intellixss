@@ -50,6 +50,7 @@ CHALLENGES = [
         "name": "API-only XSS",
         "surface": "",
         "reachable": "`PUT /rest/products/1/reviews`",
+        "scored": "reviews",
         "why": "needs a review submitted through the API instead of the dialog's form; "
         "the scanner drives what the page renders, and the product dialog in 20.3.0 "
         "puts the review text in a plain property binding, so it is never parsed as "
@@ -61,6 +62,7 @@ CHALLENGES = [
         "name": "CSP Bypass",
         "surface": "",
         "reachable": "`POST /profile`",
+        "scored": "profile",
         "literal": "<script>alert(`xss`)</script>",
         "why": "needs an account whose username is rendered on the legacy Pug profile "
         "under a CSP the challenge rewards rewriting; the bench registers accounts, "
@@ -691,6 +693,7 @@ def write_report(rows: list, version: str, base: str) -> Path:
         c for c in CHALLENGES if c["surface"] and verdict(c["surface"]) == "clean"
     ]
     not_reached = [c for c in CHALLENGES if not c["surface"]]
+
     extra = [
         (row["key"], f)
         for row in rows
@@ -720,6 +723,13 @@ def write_report(rows: list, version: str, base: str) -> Path:
     add("|---|---|---|---|")
     for c in CHALLENGES:
         where, result = challenge_verdict(c)
+        if not c.get("surface") and c.get("scored"):
+            other = c["scored"]
+            if verdict(other) == "reproduced":
+                result = (
+                    f"not counted; the sink is proven by `{other}` in this run, and "
+                    "what keeps the challenge is its own exact value"
+                )
         if c.get("surface") and c.get("literal"):
             result = f"{result}; challenge itself needs the literal `{c['literal']}`" if result == "reproduced" else result
         add(f"| {c['name']} | `{c['key']}` | {where} | {result} |")

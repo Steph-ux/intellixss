@@ -17,7 +17,7 @@ while sending its own payload, which is what a scan is for.
 | Challenge | Key | Sink | Result |
 |---|---|---|---|
 | API-only XSS | `restfulXssChallenge` | `PUT /rest/products/1/reviews` | not reached |
-| CSP Bypass | `usernameXssChallenge` | `POST /profile` | not reached |
+| CSP Bypass | `usernameXssChallenge` | `POST /profile` | not counted; the sink is proven by `profile` in this run, and what keeps the challenge is its own exact value |
 | Client-side XSS Protection | `persistedXssUserChallenge` | `POST /profile` | reproduced; challenge itself needs the literal `<iframe src="javascript:alert(`xss`)">` |
 | DOM XSS | `localXssChallenge` | `GET /#/search?q=` | reproduced |
 | HTTP-Header XSS | `httpHeaderXssChallenge` | `GET /#/privacy-security/last-login-ip` via `localStorage` | reproduced |
