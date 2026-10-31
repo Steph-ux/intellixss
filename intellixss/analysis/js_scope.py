@@ -70,10 +70,27 @@ class Binding:
     index: int = 0  # declaration order inside the block, for identity
     kind: str = "var"  # var | let | const | param | function | class | import
     taint: Optional[Taint] = None
+    # A function-valued binding keeps the node that defines it, so a call to the
+    # name can be joined to the parameters of the function it actually reaches.
+    value: Optional[Node] = None
 
     @property
     def symbol(self) -> str:
         return f"{self.block}:{self.name}:{self.index}"
+
+
+@dataclass
+class CallSite:
+    """A call, with the callee name and the argument nodes as written.
+
+    Kept so argument-to-parameter propagation can run after the whole program
+    has been declared: the callee's binding may be declared below the call
+    (hoisting), and a parameter's taint may be discovered by a later round.
+    """
+
+    name: str
+    block: int
+    args: List[Node] = field(default_factory=list)
 
 
 @dataclass
@@ -107,6 +124,15 @@ class Block:
     bindings: List[Binding] = field(default_factory=list)
     references: List[Reference] = field(default_factory=list)
     tainted_writes: List[TaintedWrite] = field(default_factory=list)
+    # Calls made in this block, kept for the argument-to-parameter join.
+    calls: List["CallSite"] = field(default_factory=list)
+    # The id of the function block this block's parameters belong to, when this
+    # is a function body: the join needs it to find a caller's parameter.
+    owner_function: Optional[int] = None
+    # The function node whose body this block is, when it is one.
+    value: Optional[Node] = None
+    # Set once a caller has supplied taint to one of this block's parameters.
+    taint_reached: bool = False
 
     @property
     def symbol(self) -> str:
@@ -199,6 +225,187 @@ def _params_of(fn: Node) -> List[Node]:
     return [c for c in group.children if c.type not in ("(", ")", ",")]
 
 
+# -- call-site argument to parameter propagation ----------------------------
+#
+# A bundle's sink almost never reads a source directly: it is
+# ``function h2(c){ a.innerHTML = c }`` called as ``h2(location.search)``. The
+# body alone proves nothing about ``c``, which is why the tree engine reported
+# no flow at all on the Juice Shop's main.js while the regex engine reported
+# about twelve by name. What is missing is the join between a call and the
+# function it names, done on symbols rather than on text.
+
+# How many rounds of "a caller taints this parameter" to run. One round covers
+# ``h2(location.search)``; a second covers a helper that hands the value on.
+# The cap exists because a relation that keeps finding new taint is a sign of a
+# mis-join, not of depth worth paying for.
+_PROPAGATION_ROUNDS = 3
+
+
+def _param_binding(param: Node) -> Optional[Node]:
+    """The identifier a simple parameter declares (``c``), not a default form."""
+    return param if param.type == "identifier" else None
+
+
+def _param_default(param: Node) -> Optional[Node]:
+    """The default value of ``v = …``, if the parameter has one."""
+    if param.type == "assignment_pattern":
+        return _child(param, "right")
+    return None
+
+
+def _arguments_of(args: Optional[Node]) -> List[Node]:
+    """The argument nodes of a call, one node per argument."""
+    if args is None:
+        return []
+    return [c for c in args.children if c.type not in ("(", ")", ",")]
+
+
+def _writes_its_parameter(fn: Node, src: bytes) -> bool:
+    """Whether any sink in *fn* takes one of its own parameters as its value.
+
+    This is the gate that keeps the join honest on a minified bundle. Call sites
+    are recorded for every identifier call, and a bundle declares thousands of
+    one-letter helpers (``s2``, ``dh``, ``e``) that a later *parameter* also
+    happens to be named after: joining those would taint a parameter by a name
+    collision. A function is a candidate only when the sink is fed by a
+    parameter of that same function, which the body itself proves.
+    """
+    names = set()
+    for p in _params_of(fn):
+        if p.type == "identifier":
+            names.add(_text(p, src))
+        elif p.type == "assignment_pattern":
+            left = _child(p, "left")
+            if left is not None and left.type == "identifier":
+                names.add(_text(left, src))
+    if not names:
+        return False
+    body = _child(fn, "body")
+    if body is None:
+        return False
+    # A parameter reaches a sink in one of two shapes: used directly as the
+    # value the sink parses, or held in a local that is then assigned to one.
+    # Both are followed, because ``el.insertAdjacentHTML("beforeend", html)``
+    # names the method through a member and ``x.innerHTML = c`` does not.
+    reaching = set(names)
+    for _round in range(3):
+        grew = False
+        stack = [body]
+        while stack:
+            n = stack.pop()
+            if n.type == "call_expression":
+                call_fn = _child(n, "function") or (n.child(0) if n.child_count else None)
+                args = _child(n, "arguments")
+                if call_fn is not None and args is not None:
+                    prop = _text(call_fn, src)
+                    if call_fn.type in ("member_expression", "subscript_expression"):
+                        _, prop, _kind = _member_parts(call_fn, src)
+                    if prop in _SINK_METHODS or prop in _SINK_PROPERTIES:
+                        for a in _arguments_of(args):
+                            if a.type == "identifier" and _text(a, src) in reaching:
+                                return True
+            elif n.type in ("assignment_expression", "variable_declarator"):
+                left = _child(n, "left") if n.type == "assignment_expression" else _child(n, "name")
+                right = _child(n, "right") if n.type == "assignment_expression" else _child(n, "value")
+                if left is not None and right is not None and right.type == "identifier":
+                    if _text(right, src) in reaching:
+                        if left.type in ("member_expression", "subscript_expression"):
+                            _, prop, _kind = _member_parts(left, src)
+                            if prop in _SINK_PROPERTIES:
+                                return True
+                        elif left.type == "identifier" and _text(left, src) not in reaching:
+                            reaching.add(_text(left, src))
+                            grew = True
+            stack.extend(n.children)
+        if not grew:
+            break
+    return False
+
+
+def _enclosing_function_block(blocks: List[Block], block: Block) -> Optional[Block]:
+    """The block of the function whose body *block* is, walking outward."""
+    seen = 0
+    current: Optional[Block] = block
+    while current is not None and seen < 32:
+        if current.kind in ("function_declaration", "function_expression", "arrow_function",
+                            "generator_function_declaration", "method_definition"):
+            return current
+        current = blocks[current.parent] if current.parent is not None else None
+        seen += 1
+    return None
+
+
+def _taint_parameters_by_call(resolver: "_Resolver") -> None:
+    """Join every call site to the parameters it supplies, and repeat.
+
+    A parameter is tainted when *any* caller passes a tainted argument to its
+    position. One caller passing a source is enough: the function is a sink
+    reachable from a URL for that page, whatever the other callers do. The
+    parameter of a function no caller reaches stays untainted, which is what
+    keeps ``h2("<b>x</b>")`` from being reported.
+
+    The function body was analysed before its parameter was known to hold a
+    source, so the body is walked once more after the join: the sink inside it
+    is the same statement, now with evidence behind its argument.
+    """
+    blocks = resolver.blocks
+    for _round in range(_PROPAGATION_ROUNDS):
+        changed = False
+        for owner in blocks:
+            for call in list(owner.calls):
+                target = resolver._lookup(owner.index, call.name)
+                if target is None or target.value is None:
+                    continue
+                fblock = next(
+                    (b for b in blocks if b.value is target.value
+                     and b.kind == target.value.type),
+                    None,
+                )
+                if fblock is None:
+                    continue
+                # A name collision is not a join: only a function whose sink is
+                # fed by its own parameter can be tainted from a call site.
+                if not _writes_its_parameter(target.value, resolver.src_bytes):
+                    continue
+                params = _params_of(target.value)
+                for i, param in enumerate(params):
+                    supplied = call.args[i] if i < len(call.args) else _param_default(param)
+                    if supplied is None:
+                        continue
+                    t = resolver.taint_of(supplied, owner)
+                    if t is None:
+                        continue
+                    # ``v`` and ``v = ""`` both bind a name; a pattern form names
+                    # several and is left to the declaration pass.
+                    plain = param
+                    if param.type == "assignment_pattern":
+                        plain = _child(param, "left") or param
+                    if plain.type != "identifier":
+                        continue
+                    bound = fblock.binding(_text(plain, resolver.src_bytes))
+                    if bound is None or bound.taint is not None:
+                        continue
+                    bound.taint = t
+                    changed = True
+        for fblock in list(blocks):
+            if fblock.taint_reached or fblock.value is None:
+                continue
+            if not any(b.kind == "param" and b.taint is not None for b in fblock.bindings):
+                continue
+            fblock.taint_reached = True
+            body = _child(fblock.value, "body")
+            if body is None:
+                continue
+            if body.type == "statement_block":
+                for child in body.children:
+                    resolver.walk(child, fblock)
+            else:
+                resolver.walk(body, fblock)
+            changed = True
+        if not changed:
+            break
+
+
 def _name_of(node: Node, src: bytes) -> str:
     """The literal name of an identifier/property node, '' when computed."""
     if node.type in ("identifier", "property_identifier",
@@ -289,7 +496,9 @@ class _Resolver:
             t = child.type
             if t in ("function_declaration", "generator_function_declaration"):
                 name = _child(child, "name")
-                self._bind(block, _name_of(name, self.src_bytes), "function", None)
+                bound = self._bind(block, _name_of(name, self.src_bytes), "function", None)
+                # The node is what a call to the name is joined to.
+                bound.value = child
             elif t in ("class_declaration",):
                 name = _child(child, "name")
                 self._bind(block, _name_of(name, self.src_bytes), "class", None)
@@ -308,13 +517,21 @@ class _Resolver:
                     if decl.type != "variable_declarator":
                         continue
                     value = _child(decl, "value")
-                    if value is not None and value.type in ("function_expression", "arrow_function"):
-                        inner = self._new_block(value.type, "", block.index)
-                        for p in _params_of(value):
-                            self._declare_pattern(p, inner, "param")
-                        body = _child(value, "body")
-                        if body is not None:
-                            self.declare(body, inner)
+                    if value is None or value.type not in ("function_expression", "arrow_function"):
+                        continue
+                    # ``const f = () => …`` makes ``f`` callable by name: a call to
+                    # it is joined to the parameters of the function it holds.
+                    target = _child(decl, "name")
+                    if target is not None and target.type == "identifier":
+                        holder = self._bind(block, _name_of(target, self.src_bytes), kind, None)
+                        holder.value = value
+                    inner = self._new_block(value.type, "", block.index)
+                    inner.value = value
+                    for p in _params_of(value):
+                        self._declare_pattern(p, inner, "param")
+                    body = _child(value, "body")
+                    if body is not None:
+                        self.declare(body, inner)
                 continue
             elif t == "import_statement":
                 for c in child.children:
@@ -544,6 +761,7 @@ class _Resolver:
     def _function(self, node: Node, block: Block) -> None:
         name_node = _child(node, "name")
         inner = self._new_block(node.type, _name_of(name_node, self.src_bytes) if name_node else "", block.index)
+        inner.value = node
         for p in _params_of(node):
             self._declare_pattern(p, inner, "param")
         params = _child(node, "parameters") or _child(node, "parameter")
@@ -587,6 +805,16 @@ class _Resolver:
         args = _child(node, "arguments")
         if fn is None:
             return
+        # Every call by name is kept: the function it reaches may be declared
+        # below (hoisting) or gain tainted parameters from a later round.
+        if fn.type == "identifier":
+            block.calls.append(
+                CallSite(
+                    name=_name_of(fn, self.src_bytes),
+                    block=block.index,
+                    args=_arguments_of(args),
+                )
+            )
 
         # (a) A sink method: ``el.insertAdjacentHTML('beforeend', v)``.
         if fn.type in ("member_expression", "subscript_expression"):
@@ -807,4 +1035,5 @@ def resolve_scopes(scripts: List[str]) -> List[Block]:
     for child in root.children:
         resolver.walk(child, program)
     resolver._resolve_references(root, program, None)
+    _taint_parameters_by_call(resolver)
     return resolver.blocks
