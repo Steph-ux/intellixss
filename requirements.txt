@@ -5,3 +5,11 @@ lxml>=4.9.0
 playwright>=1.40.0
 pytest>=7.0.0
 pytest-asyncio>=0.21.0
+# tree-sitter — real JavaScript/JSX concrete syntax tree for DOM taint analysis;
+# errors are recovered per node, which regex scanning cannot do. Wheels are
+# abi3 (cp310) for win/linux/mac, so no compiler is needed on install.
+# Keep the pair together: the Python binding and the grammar wheel are versioned
+# separately and must be verified as a pair before a bump.
+tree-sitter>=0.26.0,<0.27
+tree-sitter-javascript>=0.25.0,<0.26
+
