@@ -638,6 +638,8 @@ def write_report(rows: list, version: str, base: str) -> Path:
             return "reproduced"
         if any(f["verified_by"] == "static" for f in own):
             return "static only"
+        if any(f.get("type") == "reflection" for f in own):
+            return "stored, not executable"
         if own:
             return "lead only"
         return "clean"
@@ -831,6 +833,30 @@ def write_report(rows: list, version: str, base: str) -> Path:
             elif replay:
                 add(f"- Replay: {replay.get('note', 'not replayed')}")
             add("")
+    add("## Stored records that do not execute")
+    add("")
+    add(
+        "A record the page keeps and renders as text: the value is stored and "
+        "comes back, and the page gives nothing in it a chance to run. It is "
+        "replayed the same way a confirmed finding is, so the row says whether "
+        "the wire agrees — a record the replay cannot reproduce was not one."
+    )
+    add("")
+    for row in rows:
+        for f in row["findings"]:
+            if f.get("type") != "reflection":
+                continue
+            replay = f.get("replay") or {}
+            stored = replay.get("stored")
+            verdict_cell = (
+                "absent on replay" if stored is False else
+                ("stored, not executable" if stored else "not replayed")
+            )
+            add(
+                f"- `{f['method']} {f['url']}` parameter `{f['param']}`, "
+                f"context `{f['ctx']}`: {verdict_cell}"
+            )
+    add("")
     add("## Not reached by the roster, and why")
     add("")
     for c in CHALLENGES:
@@ -902,17 +928,34 @@ async def main() -> None:
         row["findings"] = own
         confirmed = [f for f in own if f["verified_by"] == "browser"]
         static = [f for f in own if f["verified_by"] == "static"]
-        heads = [f for f in own if f["verified_by"] not in ("browser", "static")]
+        # A record the page reflects without executing is written down and then
+        # weighed on the wire: a reflection the replay cannot reproduce was not
+        # a reflection, and one it can is still not a script.
+        reflected = [f for f in own if f.get("type") == "reflection"]
+        heads = [
+            f
+            for f in own
+            if f["verified_by"] not in ("browser", "static")
+            and f.get("type") != "reflection"
+        ]
         verdict = "CONFIRMED" if confirmed else ("static" if static else ("lead" if heads else "CLEAN"))
         print(f"    {verdict:10} {row['status']:8} {row.get('secs', 0):6}s "
               f"req={row['requests']} targets={row.get('targets', 0)} "
-              f"conf={len(confirmed)} static={len(static)} lead={len(heads)}", flush=True)
+              f"conf={len(confirmed)} static={len(static)} lead={len(heads)} "
+              f"reflected={len(reflected)}", flush=True)
         for f in own[:4]:
             print(f"        {f['verified_by']:9} {f['ctx']:20} {f['payload'][:48]!r}", flush=True)
         if not args.no_replay:
             for f in own:
-                if f["verified_by"] in ("browser", "static", "reflection"):
+                if f["verified_by"] in ("browser", "static"):
                     f["replay"] = reproduce(base, surface, f, account.get("token") or token, account)
+            for f in reflected:
+                f["replay"] = reproduce(base, surface, f, account.get("token") or token, account)
+                print(
+                    f"        reflection replayed on the wire: "
+                    f"stored={f['replay'].get('stored')}",
+                    flush=True,
+                )
         row["surface"] = {k: v for k, v in surface.items()}
         rows.append(row)
 
