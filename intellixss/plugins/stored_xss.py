@@ -98,6 +98,12 @@ STORE_FIELDS = [
     "bio",
     "title",
     "name",
+    # The account's display name is stored content in the same sense as a
+    # comment: an application renders it on the profile page and in every page
+    # header, long after the write answered. It was missing from this list, so a
+    # form whose only stored field is the username was skipped by the pass that
+    # exists to follow a record from the write to the page that renders it.
+    "username",
 ]
 
 

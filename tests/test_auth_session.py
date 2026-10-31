@@ -67,6 +67,18 @@ def test_a_cross_host_redirect_is_not_a_login_redirect():
     assert not _is_login_redirect("https://a.test/", "https://b.test/login")
 
 
+def test_a_form_post_that_updates_a_record_is_not_a_login():
+    """A POST answering 302 to the page that renders the record is the write.
+
+    Login was inferred from the *page after* the POST looking like an
+    authentication page. A profile form updates the account and answers by
+    redirecting to the page that renders it, so the scan concluded the
+    credentials had been rejected — after the record had already been stored —
+    and the credentialed pages were never read at all.
+    """
+    assert not _is_login_redirect("https://x.test/profile", "https://x.test/profile")
+
+
 def test_the_password_bearing_form_is_the_one_read():
     page = '<form action="/search"><input name="q"></form>' + LOGIN_FORM
     fields = _form_fields(page)
