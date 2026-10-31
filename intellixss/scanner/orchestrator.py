@@ -213,6 +213,16 @@ class Scanner:
 
         if self.config.use_browser:
             await self.browser.start()
+            # An SPA scopes its session to the store, not to a cookie: the token
+            # arrives as a bearer header and the page only sees it once it is in
+            # ``localStorage``. Handing it to the browser here means every later
+            # confirmation runs with the same identity the HTTP client uses.
+            bearer = auth_headers.get("Authorization", "")
+            if bearer.lower().startswith("bearer "):
+                try:
+                    self.browser.set_storage({"token": bearer.split(" ", 1)[1].strip()})
+                except Exception:
+                    pass
 
         try:
             async with HttpClient(
@@ -277,11 +287,19 @@ class Scanner:
                 await asyncio.gather(*[_one(t) for t in targets])
 
                 # Sources the URL cannot drive are invisible to the ladder, so
-                # the page is analysed directly for them.
+                # the page is analysed directly for them. The document itself is
+                # the unit: a sink reading ``localStorage`` or ``window.name``
+                # belongs to the page, not to any injectable endpoint the
+                # discovery found in its bundles — analysing a target list is
+                # how this step used to miss every sink it existed for.
                 if self.config.use_browser and self.browser.available:
-                    for t in targets[:3]:
-                        if t.method.upper() == "GET":
-                            await self._scan_source_dom(client, t, result, lock)
+                    page_target = ScanTarget(
+                        url=target_url,
+                        method="GET",
+                        params=[],
+                        source="page",
+                    )
+                    await self._scan_source_dom(client, page_target, result, lock)
 
                 await self._stored_pass(client, target_url, targets, result, lock)
                 if self.config.deep:
@@ -378,6 +396,7 @@ class Scanner:
                 self.browser.set_cookies(cookies)
             except Exception:
                 pass
+
         self._log(f"session established at {urlparse(login_url).path}", "info")
         return True
 
@@ -920,8 +939,19 @@ class Scanner:
         if not status or not body:
             return
 
+        # The sink usually lives in the bundle, not in the document: an SPA
+        # ships an almost empty shell and every component arrives in a
+        # ``<script src>``. Analysing only the document would see nothing.
+        external = await self._page_scripts(client, body, target.url)
         finding = dom_source_finding(
-            final or target.url, body, marker=make_marker(str(id(target))[-8:])
+            # The document that carries the fragment, not the response URL: a
+            # fragment never reaches the server, so ``final`` is the origin and
+            # confirming against it would load a different page than the one
+            # being scanned.
+            target.url,
+            body,
+            marker=make_marker(str(id(target))[-8:]),
+            external_js=external,
         )
         if not finding:
             return
@@ -1811,14 +1841,22 @@ class Scanner:
         owns_parameter = bool(finding.parameter) and not _is_fragment_name(
             finding.parameter
         )
-        if owns_parameter:
+        # A *seeded* finding names its source, not a URL parameter: the source is
+        # ``localStorage``, ``window.name`` or ``document.referrer``. Writing it
+        # into the query string would ask the page for a parameter it never
+        # reads, and the value would never reach the sink. Those are proven by
+        # the seed alone, against the page's own URL.
+        seeded = bool(finding.seeds)
+        if owns_parameter and not seeded:
             is_fragment = False
         # Each candidate needs its own URL: the fragment is appended, the query
         # parameter is substituted in the original URL.
         param = finding.parameter
 
         for payload in candidates:
-            if is_fragment:
+            if seeded:
+                url = finding.url
+            elif is_fragment:
                 url = f"{base}#{payload}"
             else:
                 # ``base`` already carries the finding's own payload, so the

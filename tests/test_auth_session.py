@@ -13,6 +13,8 @@ different way:
   explicitly or every browser confirmation is made as an anonymous visitor.
 """
 
+import asyncio
+
 from intellixss.auth import parse_cookie_string
 from intellixss.scanner.orchestrator import (
     _form_fields,
@@ -93,3 +95,54 @@ def test_the_confirmer_accepts_a_session_for_later_pages():
     assert confirmer._session_cookies == {}
     confirmer.set_cookies({"session": "abc"})
     assert confirmer._session_cookies == {"session": "abc"}
+
+
+def test_the_confirmer_accepts_a_stored_token_for_later_pages():
+    # A cookie session and a stored token are two different sessions. An SPA
+    # renders nothing for a user whose token is not in ``localStorage``, so a
+    # sink behind that login would be refuted as if the page were anonymous.
+    confirmer = BrowserConfirmer(Config())
+    assert confirmer._session_storage == {}
+    confirmer.set_storage({"token": "a.b.c"})
+    assert confirmer._session_storage == {"token": "a.b.c"}
+
+
+class _RecordingPage:
+    """Enough of a Playwright page to observe what seeding installs."""
+
+    def __init__(self):
+        self.scripts = []
+
+    async def add_init_script(self, script):
+        self.scripts.append(script)
+
+    class context:
+        @staticmethod
+        async def add_cookies(_cookies):
+            return None
+
+
+def _seeded_store(session_storage: dict, seed: dict) -> str:
+    confirmer = BrowserConfirmer(Config())
+    confirmer.set_storage(session_storage)
+    page = _RecordingPage()
+    asyncio.run(
+        confirmer._seed_sources(page, "http://x.test/", "", None, storage=seed)
+    )
+    assert page.scripts, "no init script installed"
+    return page.scripts[0]
+
+
+def test_a_payload_seed_overlays_the_session_token_without_dropping_other_keys():
+    # The seed is what the sink renders; the session token is what the page needs
+    # to render at all. Seeding must replace the value on the shared key and
+    # leave every unrelated session key in place.
+    script = _seeded_store({"token": "session-token", "bid": "1"}, {"token": "seeded-token"})
+    assert "seeded-token" in script
+    assert "session-token" not in script
+    assert "bid" in script
+
+
+def test_without_a_payload_seed_the_session_store_is_installed_as_is():
+    script = _seeded_store({"token": "session-token"}, {})
+    assert "session-token" in script

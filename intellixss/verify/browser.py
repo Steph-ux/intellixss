@@ -94,6 +94,25 @@ _REFERRER_INIT = """
 """
 
 
+# A sink that reads ``localStorage`` decodes a value the application itself
+# wrote there, not a URL parameter. The seed therefore has to be installed in
+# storage *before* the page's first script runs — Angular-style SPA routers
+# abort the navigation when the token is missing, so setting it after ``goto()``
+# leaves the view empty and the sink unreachable.
+_STORAGE_INIT = """
+(() => {
+  const items = %s;
+  const store = %s;
+  try {
+    const s = store === 'session' ? window.sessionStorage : window.localStorage;
+    for (const k of Object.keys(items)) {
+      s.setItem(k, items[k]);
+    }
+  } catch (e) {}
+})();
+"""
+
+
 class BrowserConfirmer:
     """
     Headless Chromium confirmation:
@@ -109,6 +128,7 @@ class BrowserConfirmer:
         self._log = log or (lambda *a, **k: None)
         self._pw = None
         self._session_cookies: dict = {}
+        self._session_storage: dict = {}
         self._browser = None
         self._sem = asyncio.Semaphore(max(1, config.browser_concurrency))
         self._budget = {}  # host -> remaining navigations
@@ -174,6 +194,19 @@ class BrowserConfirmer:
             str(k): str(v) for k, v in (cookies or {}).items() if str(k)
         }
 
+    def set_storage(self, items: dict) -> None:
+        """Offer a token an SPA keeps in ``localStorage`` to every page later.
+
+        A cookie session and a stored token are not the same session: a
+        single-page application reads its bearer token out of the store and
+        renders nothing without it, so a sink behind such a login would be
+        refuted as if the page were anonymous. Values are set before the page's
+        first script, since the router reads them synchronously.
+        """
+        self._session_storage = {
+            str(k): str(v) for k, v in (items or {}).items() if str(k)
+        }
+
     # ------------------------------------------------------------------
     # budget (avoid hammering a host with Chromium navigations)
     # ------------------------------------------------------------------
@@ -206,6 +239,8 @@ class BrowserConfirmer:
         url: str,
         window_name: str,
         cookies: Optional[List[Tuple[str, str]]],
+        storage: Optional[dict] = None,
+        session_storage: Optional[dict] = None,
     ) -> None:
         """Give the page the browser-owned values a DOM sink may read."""
         try:
@@ -220,6 +255,19 @@ class BrowserConfirmer:
                         for n, v in jar.items()
                     ]
                 )
+            # The session's own stored token goes in first, then the payload
+            # seed on top: a sink that reads the token must find a session the
+            # page can render, and the seed is what that token decodes into.
+            local = dict(self._session_storage)
+            local.update(storage or {})
+            for kind, items in (("local", local), ("session", session_storage)):
+                if items:
+                    # Installed as an init script so it runs against the page's
+                    # own origin before any of its code. ``about:blank`` cannot
+                    # hold storage for the target origin, so navigation is needed.
+                    await page.add_init_script(
+                        _STORAGE_INIT % (json.dumps(items), json.dumps(kind))
+                    )
             if window_name:
                 # window.name survives navigation because it belongs to the
                 # browsing context, so it must be set on *this* page first.
@@ -300,6 +348,8 @@ class BrowserConfirmer:
         referrer: str = "",
         window_name: str = "",
         cookies: Optional[List[Tuple[str, str]]] = None,
+        storage: Optional[dict] = None,
+        session_storage: Optional[dict] = None,
         warm_url: str = "",
     ) -> BrowserConfirmResult:
         """
@@ -344,6 +394,8 @@ class BrowserConfirmer:
                     referrer=referrer,
                     window_name=window_name,
                     cookies=cookies,
+                    storage=storage,
+                    session_storage=session_storage,
                     warm_url=warm_url,
                 ),
                 timeout=budget,
@@ -364,6 +416,8 @@ class BrowserConfirmer:
         referrer: str = "",
         window_name: str = "",
         cookies: Optional[List[Tuple[str, str]]] = None,
+        storage: Optional[dict] = None,
+        session_storage: Optional[dict] = None,
         warm_url: str = "",
     ) -> BrowserConfirmResult:
         if not self.available or not self._browser:
@@ -446,7 +500,9 @@ class BrowserConfirmer:
                 # Seed browser-owned sources *before* the document parses: these
                 # handlers read their value synchronously, so setting them after
                 # goto() is too late.
-                await self._seed_sources(page, url, window_name, cookies)
+                await self._seed_sources(
+                    page, url, window_name, cookies, storage, session_storage
+                )
 
                 if warm_url and warm_url != url:
                     # A stored record is not part of the handler's response: it

