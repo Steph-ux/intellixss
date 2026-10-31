@@ -97,6 +97,28 @@ def test_assigning_the_location_object_itself_is_a_navigation():
         assert ("location.search", "location_assign") in _flows(src), lhs
 
 
+def test_location_assign_navigates_the_page():
+    """``location.assign(url)`` is the method form of ``location.href = url``.
+
+    The page navigated to a ``javascript:`` URL runs code in this origin, which
+    is the same consequence as the assignment and has to be reported the same
+    way — a reader of the evidence expects the one sink name.
+    """
+    for receiver in ("location", "document.location", "window.location"):
+        src = f"function go() {{ {receiver}.assign(location.search); }}"
+        assert ("location.search", "location_assign") in _flows(src), receiver
+
+
+def test_an_object_method_named_assign_is_not_a_navigation():
+    """``router.assign(path)`` routes an application; it navigates nothing."""
+    src = """
+    function go(router) {
+      router.assign(location.search);
+    }
+    """
+    assert _flows(src) == set()
+
+
 def test_assigning_location_to_a_local_is_not_a_sink():
     """``var here = location`` reads the object; it navigates nowhere."""
     src = """

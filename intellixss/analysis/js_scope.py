@@ -1138,7 +1138,20 @@ class _Resolver:
                     block.tainted_writes.append(
                         TaintedWrite(sink=label, source=value.source, family=family)
                     )
-            # (b) A response callback: its parameter receives the response when
+            # (b) ``location.assign(url)``: the method form of
+            # ``location.href = url``. Only the navigator has an ``assign`` that
+            # moves the page; ``router.assign(path)`` belongs to the router.
+            if kind != "computed" and prop == "assign" and args is not None:
+                head, _, tail = base.rpartition(".")
+                if (tail or head) in _NAVIGATING_RECEIVERS and (
+                    base in _NAVIGATING_RECEIVERS or (tail and head in _GLOBAL_ALIASES)
+                ):
+                    value = self._sink_argument(prop, args, block)
+                    if value is not None:
+                        block.tainted_writes.append(
+                            TaintedWrite(sink="location_assign", source=value.source, family="src")
+                        )
+            # (c) A response callback: its parameter receives the response when
             # the receiver is a request.
             if kind != "computed" and prop in _RESPONSE_METHODS and args is not None:
                 cb = next((c for c in args.children if c.type in ("arrow_function", "function_expression")), None)
