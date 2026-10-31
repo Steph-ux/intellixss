@@ -141,6 +141,20 @@ _CONFIRM_DEADLINE = 45.0
 # must still happen, so a speculative probe stops before touching the reserve.
 _CLIENT_ROUTE_RESERVE = 4
 
+
+def route_probe_payload(marker: str) -> str:
+    """The payload a client route is probed with.
+
+    The fragment never reaches the server, but the component it lands in can
+    still send the value on: the tracking page asks an API for the id it was
+    given, and that API builds a server-side expression around it. A handler
+    written with ``'…'`` in the payload ends that expression and the answer is a
+    500, so the sink is never rendered and an executing route reports clean.
+    The marker is ours, so it moves to a template literal, which the same
+    expression builder takes verbatim.
+    """
+    return f"<img src=x onerror=alert(`{marker}`)>"
+
 _EVENT_CANDIDATES = [
     "onfocus", "onmouseover", "onpointerover", "onanimationstart",
     "ontoggle", "onbeforetoggle", "onscrollend", "onanimationiteration",
@@ -784,7 +798,7 @@ class Scanner:
         # only choice that is not a guess, and a second guess would spend a
         # navigation that an evidence-backed stored confirmation needs: the
         # per-host budget is what decides whether those get confirmed at all.
-        payload = f"<img src=x onerror=alert('{marker}')>"
+        payload = route_probe_payload(marker)
         url = set_hash_query_param(target.url, param, payload)
         async with lock:
             result.stats.requests += 1

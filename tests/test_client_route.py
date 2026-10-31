@@ -50,6 +50,53 @@ def test_a_key_read_through_a_local_object_is_not_invented():
     assert detect_client_route_params("let t=this.route.snapshot.queryParams[k]") == []
 
 
+# The writer shape of the built Angular bundle, verbatim from Juice Shop 20.3.0.
+# The navigate call sits just past the 400 characters that used to be searched
+# around the object, so a window measured from the object's ``{`` never sees it
+# while a window measured from its ``}`` already did. These strings are edited
+# to keep that distance; the constant is deliberately not tuned to them.
+JUICE_TRACK_ORDER = (
+    "openConfirmationPDF(t){let i=`${this.basketService.hostServer}/ftp/order_${t}.pdf`;"
+    "window.open(i,`_blank`)}trackOrder(t){this.ngZone.run(()=>L$1(this,null,function*(){"
+    "let i={queryParams:{id:t}};"
+    # The build inlines the component body between the local and the call.
+    "const " + "s" * 480 + "=1;"
+    "return yield this.router.navigate([`/track-result`],i)}))}"
+    "static ɵfac=function(i){return new(i||e)}"
+)
+
+
+
+def test_navigate_call_pairs_the_route_across_a_function_boundary():
+    """The built form hoists the object into a local before the navigate call.
+
+    ``trackOrder(t){… let i={queryParams:{id:t}}; … navigate([`/track-result`],i)}``
+    read as an empty route probes ``/`` instead of ``#/track-result``, and the
+    sink is never visited. The route must follow the call, however far the
+    object sits from it.
+    """
+    pairs = detect_client_route_params(JUICE_TRACK_ORDER)
+    assert ("/track-result", "id") in pairs
+    # The empty-route reading would have the scanner probe ``/?id=`` forever.
+    assert ("", "id") not in pairs
+
+
+def test_the_nearest_navigate_after_the_object_wins():
+    """Two writers in one bundle pair with their own routes, in order.
+
+    A bundle carries the search box and the order-history link side by side;
+    pairing the first object with the second route sends the payload to the
+    wrong component and the scan reports a clean page.
+    """
+    js = (
+        "search(t){let i={queryParams:{q:t}};this.router.navigate([`/search`],i)}"
+        "trackOrder(t){let i={queryParams:{id:t}};this.router.navigate([`/track-result`],i)}"
+    )
+    pairs = detect_client_route_params(js)
+    assert ("/search", "q") in pairs
+    assert ("/track-result", "id") in pairs
+
+
 def test_hash_route_injection_lands_inside_the_fragment():
     """The payload has to travel in the fragment, not the query string.
 

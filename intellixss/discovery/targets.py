@@ -246,6 +246,12 @@ def _detect_client_query_params(html: str) -> List[str]:
     return names[:12]
 
 
+# How far past a query object its ``navigate`` call may sit. A source writer
+# keeps the two adjacent, but a built bundle hoists the object into a local a
+# statement earlier; the window only has to clear the component's own body.
+_ROUTE_SEARCH_CHARS = 2000
+
+
 def detect_client_route_params(js: str) -> List[Tuple[str, str]]:
     """Return ``(route, parameter)`` pairs the client router reads.
 
@@ -286,11 +292,20 @@ def detect_client_route_params(js: str) -> List[Tuple[str, str]]:
         ]
         if not keys:
             continue
+        # The writer is not always beside its object. A source writer passes
+        # ``{queryParams:{q:t}}`` straight into ``navigate``, but a built bundle
+        # hoists the object into a local a statement earlier
+        # (``let i={queryParams:{id:t}}; … navigate([`/track-result`],i)``), and
+        # a component can write several keys in one object. Searching only the
+        # 400 characters around the ``{`` left the first shape unpaired and the
+        # scanner probed ``/`` instead of the route that renders the value.
+        # The nearest ``navigate`` after the object is the one it was written
+        # for; the one before it is only used when there is none after.
+        after = js[m.end():m.end() + _ROUTE_SEARCH_CHARS]
         before = js[max(0, m.start() - 400):m.start()]
-        after = js[m.end():m.end() + 400]
-        route_m = re.search(
-            r"""navigate\s*\(\s*\[\s*['"`]([^'"`]*)['"`]""", after
-        ) or re.search(r"""navigate\s*\(\s*\[\s*['"`]([^'"`]*)['"`]""", before)
+        route_m = re.search(r"""navigate\s*\(\s*\[\s*['"`]([^'"`]*)['"`]""", after)
+        if not route_m:
+            route_m = re.search(r"""navigate\s*\(\s*\[\s*['"`]([^'"`]*)['"`]""", before)
         route = route_m.group(1) if route_m else ""
         for key in keys:
             _keep(route, key)
