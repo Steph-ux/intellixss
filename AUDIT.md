@@ -96,3 +96,9 @@ regex analyser's answer is what the scanner uses there today.
   reported only for the hash (`tests/test_dom_engine_switch.py`).
 * A record whose create response names no identifier cannot be removed
   automatically; it is listed in the report for the operator.
+* The stored pass is opened for `POST` targets only. A handler that stores on
+  `PUT` and has no form on its page — `PUT /rest/products/1/reviews` on the
+  Juice Shop — is measured as a reflection, so the sink it feeds is reported as
+  a lead. The stored plugin itself writes the method it is given
+  (`tests/test_stored_refused_field.py`); the gate is the orchestrator's call
+  site.
