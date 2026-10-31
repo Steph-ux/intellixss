@@ -190,7 +190,7 @@ async def scan_one(url: str, extra: list[str] | None = None) -> dict:
     Labs whose surface is behind a login are scanned with the account the page
     itself advertises, so the session reaches the HTTP client and the browser.
     """
-    cfg = Config(guess_params=True)
+    cfg = Config(guess_params=True, writes=True)
     cfg.auth = AuthConfig(username="wiener", password="peter")
     s = Scanner(cfg)
     s._mute = True
