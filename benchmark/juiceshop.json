@@ -3,9 +3,10 @@
     "key": "home",
     "status": "ok",
     "findings": [],
-    "requests": 68,
+    "requests": 69,
     "targets": 38,
-    "secs": 51.3,
+    "secs": 69.7,
+    "session": "shared",
     "surface": {
       "key": "home",
       "page": "/",
@@ -33,13 +34,14 @@
           "stored": false,
           "dom": true,
           "marker": "ixm03bac14b",
-          "note": "hash route \u2014 execution is browser-only"
+          "note": "hash route: execution is browser-only"
         }
       }
     ],
-    "requests": 68,
+    "requests": 69,
     "targets": 38,
-    "secs": 52.1,
+    "secs": 70.6,
+    "session": "shared",
     "surface": {
       "key": "search",
       "challenge": "localXssChallenge",
@@ -57,23 +59,24 @@
       {
         "param": "message",
         "ctx": "html_text",
-        "verified_by": "browser",
-        "payload": "<img src=x onerror=alert('ixm9638094e')>",
+        "verified_by": "reflection",
+        "payload": "<img src=x onerror=alert('ixm1994f906')>",
         "type": "stored",
         "method": "PUT",
         "url": "http://127.0.0.1:3000/rest/products/1/reviews",
-        "marker": "ixm9638094e",
+        "marker": "ixm1994f906",
         "replay": {
           "status": 201,
           "echoed": false,
           "stored": true,
-          "marker": "ixm9638094e"
+          "marker": "ixm1994f906"
         }
       }
     ],
-    "requests": 68,
+    "requests": 69,
     "targets": 38,
-    "secs": 51.8,
+    "secs": 68.8,
+    "session": "shared",
     "surface": {
       "key": "reviews",
       "challenge": "restfulXssChallenge",
@@ -81,16 +84,17 @@
       "endpoint": "/rest/products/1/reviews",
       "field": "message",
       "method": "PUT",
-      "note": "`PUT /rest/products/1/reviews` stores `message` verbatim, with no authentication; the value is rendered back on the product page."
+      "note": "`PUT /rest/products/1/reviews` stores `message` verbatim, with no authentication; the Angular template writes it into the product dialog, which 20.3.0 opens from the `#/search` grid rather than a route of its own."
     }
   },
   {
     "key": "feedback",
     "status": "ok",
     "findings": [],
-    "requests": 68,
+    "requests": 69,
     "targets": 38,
-    "secs": 54.8,
+    "secs": 69.1,
+    "session": "shared",
     "surface": {
       "key": "feedback",
       "challenge": "persistedXssFeedbackChallenge",
@@ -109,22 +113,23 @@
         "param": "message",
         "ctx": "html_text",
         "verified_by": "browser",
-        "payload": "<img src=x onerror=alert('ixmdd205bea')>",
+        "payload": "<img src=x onerror=alert('ixm82163f7b')>",
         "type": "stored",
         "method": "POST",
         "url": "http://127.0.0.1:3000/api/Complaints",
-        "marker": "ixmdd205bea",
+        "marker": "ixm82163f7b",
         "replay": {
           "status": 201,
           "echoed": true,
           "stored": true,
-          "marker": "ixmdd205bea"
+          "marker": "ixm82163f7b"
         }
       }
     ],
-    "requests": 68,
+    "requests": 69,
     "targets": 38,
-    "secs": 51.5,
+    "secs": 71.1,
+    "session": "shared",
     "surface": {
       "key": "complaints",
       "page": "/",
@@ -136,12 +141,91 @@
     }
   },
   {
+    "key": "last-login-ip",
+    "status": "ok",
+    "findings": [
+      {
+        "param": "localStorage",
+        "ctx": "url_fragment",
+        "verified_by": "browser",
+        "payload": "<img src=x onerror=alert('ixm82866704')>",
+        "type": "dom",
+        "method": "GET",
+        "url": "http://127.0.0.1:3000/#/privacy-security/last-login-ip",
+        "marker": "ixm82866704",
+        "replay": {
+          "status": 0,
+          "echoed": false,
+          "stored": false,
+          "dom": true,
+          "marker": "ixm82866704",
+          "note": "hash route: execution is browser-only"
+        }
+      }
+    ],
+    "requests": 69,
+    "targets": 38,
+    "secs": 65.4,
+    "session": "account",
+    "surface": {
+      "key": "last-login-ip",
+      "challenge": "httpHeaderXssChallenge",
+      "page": "/#/privacy-security/last-login-ip",
+      "endpoint": "/rest/saveLoginIp",
+      "route": "/privacy-security/last-login-ip",
+      "field": "True-Client-IP",
+      "method": "GET",
+      "header": {
+        "True-Client-IP": "IntelliXSS-bench"
+      },
+      "needs_account": true,
+      "note": "`GET /rest/saveLoginIp` stores the `True-Client-IP` header on the session's user; `last-login-ip` decodes the token out of `localStorage` and writes it through `bypassSecurityTrustHtml`. The header below is a probe, not the payload: the scanner has to discover the stored header and confirm it."
+    }
+  },
+  {
+    "key": "profile",
+    "status": "ok",
+    "findings": [
+      {
+        "param": "username",
+        "ctx": "html_text",
+        "verified_by": "browser",
+        "payload": "<img src=x onerror=alert('ixm47cf91a6')>",
+        "type": "stored",
+        "method": "POST",
+        "url": "http://127.0.0.1:3000/profile",
+        "marker": "ixm47cf91a6",
+        "replay": {
+          "status": 200,
+          "echoed": true,
+          "stored": true,
+          "marker": "ixm47cf91a6"
+        }
+      }
+    ],
+    "requests": 10,
+    "targets": 8,
+    "secs": 14.8,
+    "session": "account",
+    "surface": {
+      "key": "profile",
+      "challenge": "usernameXssChallenge",
+      "page": "/profile",
+      "endpoint": "/profile",
+      "field": "username",
+      "method": "POST",
+      "needs_account": true,
+      "note": "The legacy Pug profile page renders the stored username with a homegrown regex sanitizer behind a CSP the same profile can rewrite through the image URL."
+    }
+  },
+  {
     "key": "login",
     "status": "ok",
     "findings": [],
-    "requests": 68,
+    "requests": 69,
     "targets": 38,
-    "secs": 51.8,
+    "secs": 69.0,
+    "session": "shared",
     "surface": {
       "key": "login",
       "page": "/",

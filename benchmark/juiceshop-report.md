@@ -9,21 +9,31 @@ Source: `benchmark/juiceshop.json`, written by `bench/juice.py`.
 The nine entries of `data/static/challenges.yml` whose category is `XSS`.
 A challenge counts as reproduced when the scanner confirms, in a browser,
 an executing payload on the sink that challenge is about.
+Reaching a sink is not the same as solving what the challenge asks: a few
+of them are solved by the *server* recognising one exact injected value.
+Those are marked separately, because the scanner proves the sink executes
+while sending its own payload, which is what a scan is for.
 
 | Challenge | Key | Sink | Result |
 |---|---|---|---|
-| API-only XSS | `restfulXssChallenge` | `PUT /rest/products/1/reviews` | reproduced |
+| API-only XSS | `restfulXssChallenge` | not reached | not reached |
 | CSP Bypass | `usernameXssChallenge` | not reached | not reached |
-| Client-side XSS Protection | `persistedXssUserChallenge` | not reached | not reached |
+| Client-side XSS Protection | `persistedXssUserChallenge` | `POST /profile` | reproduced; challenge itself needs the literal `<iframe src="javascript:alert(`xss`)">` |
 | DOM XSS | `localXssChallenge` | `GET /#/search?q=` | reproduced |
-| HTTP-Header XSS | `httpHeaderXssChallenge` | not reached | not reached |
+| HTTP-Header XSS | `httpHeaderXssChallenge` | `GET /#/privacy-security/last-login-ip` via `localStorage` | reproduced |
 | Reflected XSS | `reflectedXssChallenge` | not reached | not reached |
 | Server-side XSS Protection | `persistedXssFeedbackChallenge` | `POST /api/Feedbacks` | clean |
 | Video XSS | `videoXssChallenge` | not reached | not reached |
 | Bonus Payload | `xssBonusChallenge` | not reached | not reached |
 
-2 of 9 documented XSS challenges reproduced automatically.
-1 documented challenge reported clean, and 6 were not reached by this roster (see below).
+The profile surface is credited for its sink, not for the challenge: the
+scanner confirms that a stored username reaches a sink that executes its
+own `<img onerror>` payload, while the challenge is solved by the server
+seeing one exact injected value. The same holds for the search surface
+and the bonus payload.
+
+3 of 9 documented XSS challenges reproduced automatically.
+1 documented challenge reported clean, and 5 were not reached by this roster (see below).
 
 A clean result is the expected answer for `persistedXssFeedbackChallenge`: the sink is behind
 `sanitize-html` with its default allow-list, so the payload is stored as
@@ -35,16 +45,37 @@ covers:
 
 - `POST /api/Complaints` (`message`, stored) on the `complaints` surface
 
+## Session material supplied by the harness
+
+A scan of an anonymous page cannot reach a sink that is only stored for
+a logged-in user, or fed by a header the page never sends. For those
+surfaces the harness supplies *identity and transport only*: a throwaway
+account registered through `POST /api/Users`, and where a surface is
+about a header, that header. No payload is pre-written by the harness.
+
+| Surface | Session | Supplied |
+|---|---|---|
+| home | shared | admin bearer |
+| search | shared | admin bearer |
+| reviews | shared | admin bearer |
+| feedback | shared | admin bearer |
+| complaints | shared | admin bearer |
+| last-login-ip | account | throwaway account, header `True-Client-IP` |
+| profile | account | throwaway account |
+| login | shared | admin bearer |
+
 ## Surfaces
 
 | Surface | Pointed at | Sink | Verdict | Confirmed | Requests | Time |
 |---|---|---|---|---|---|---|
-| home | `/` | `GET /` | clean | 0 | 68 | 51.3s |
-| search | `/` | `GET /#/search?q=` | reproduced | 1 | 68 | 52.1s |
-| reviews | `/` | `PUT /rest/products/1/reviews` | reproduced | 1 | 68 | 51.8s |
-| feedback | `/` | `POST /api/Feedbacks` | clean | 0 | 68 | 54.8s |
-| complaints | `/` | `POST /api/Complaints` | reproduced | 1 | 68 | 51.5s |
-| login | `/` | `POST /rest/user/login` | clean | 0 | 68 | 51.8s |
+| home | `/` | `GET /` | clean | 0 | 69 | 69.7s |
+| search | `/` | `GET /#/search?q=` | reproduced | 1 | 69 | 70.6s |
+| reviews | `/` | `PUT /rest/products/1/reviews` | lead only | 0 | 69 | 68.8s |
+| feedback | `/` | `POST /api/Feedbacks` | clean | 0 | 69 | 69.1s |
+| complaints | `/` | `POST /api/Complaints` | reproduced | 1 | 69 | 71.1s |
+| last-login-ip | `/#/privacy-security/last-login-ip` | `GET /#/privacy-security/last-login-ip` via `localStorage` | reproduced | 1 | 69 | 65.4s |
+| profile | `/profile` | `POST /profile` | reproduced | 1 | 10 | 14.8s |
+| login | `/` | `POST /rest/user/login` | clean | 0 | 69 | 69.0s |
 
 ## Confirmed findings
 
@@ -54,29 +85,36 @@ covers:
 - Context: `html_text`
 - Type: `dom`
 - Payload: `<img src=x onerror=alert('ixm03bac14b')>`
-- Replay: hash route, execution is browser-only
-
-### `PUT http://127.0.0.1:3000/rest/products/1/reviews`
-
-- Parameter: `message`
-- Context: `html_text`
-- Type: `stored`
-- Payload: `<img src=x onerror=alert('ixm9638094e')>`
-- Replay: HTTP `201`, echoed `false`, stored `true`
+- Replay: hash route: execution is browser-only
 
 ### `POST http://127.0.0.1:3000/api/Complaints`
 
 - Parameter: `message`
 - Context: `html_text`
 - Type: `stored`
-- Payload: `<img src=x onerror=alert('ixmdd205bea')>`
+- Payload: `<img src=x onerror=alert('ixm82163f7b')>`
 - Replay: HTTP `201`, echoed `true`, stored `true`
+
+### `GET http://127.0.0.1:3000/#/privacy-security/last-login-ip`
+
+- Parameter: `localStorage`
+- Context: `url_fragment`
+- Type: `dom`
+- Payload: `<img src=x onerror=alert('ixm82866704')>`
+- Replay: hash route: execution is browser-only
+
+### `POST http://127.0.0.1:3000/profile`
+
+- Parameter: `username`
+- Context: `html_text`
+- Type: `stored`
+- Payload: `<img src=x onerror=alert('ixm47cf91a6')>`
+- Replay: HTTP `200`, echoed `true`, stored `true`
 
 ## Not reached, and why
 
-- **CSP Bypass** (`usernameXssChallenge`): needs an account whose username is rendered on a legacy page under CSP; the roster does not register users.
-- **Client-side XSS Protection** (`persistedXssUserChallenge`): needs a registered user's username persisted and a client-side sanitizer bypass; the roster does not register users.
-- **HTTP-Header XSS** (`httpHeaderXssChallenge`): the sink is a request header persisted and rendered in the admin area; no surface sends attacker-controlled headers.
-- **Reflected XSS** (`reflectedXssChallenge`): the order-tracking page reflects the id returned by its API; the roster does not drive that page with a live order.
+- **API-only XSS** (`restfulXssChallenge`): needs a review submitted through the API instead of the dialog's form; the scanner drives what the page renders, and the product dialog in 20.3.0 puts the review text in a plain property binding, so it is never parsed as markup. The server-side sink is real; reaching it means posting the review the page itself does not post.
+- **CSP Bypass** (`usernameXssChallenge`): needs an account whose username is rendered on the legacy Pug profile under a CSP the challenge rewards rewriting; the bench registers accounts, but the challenge is solved by one exact stored value, not by proving the renderer executes what it is given.
+- **Reflected XSS** (`reflectedXssChallenge`): the order-tracking page reflects the id returned by its API; the roster does not drive that page with a live order. During every scan the route did confirm an executing payload for a direct `#/track-result?id=` navigation, but that route is not what the challenge turns on, so it is not credited here.
 - **Video XSS** (`videoXssChallenge`): needs an administrator to change the promo video URL.
 - **Bonus Payload** (`xssBonusChallenge`): shares the DOM XSS sink but requires one exact SoundCloud iframe; the scanner proves the sink, not the challenge's payload.
