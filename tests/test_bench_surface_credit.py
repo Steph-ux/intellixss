@@ -83,10 +83,14 @@ def test_a_server_rendered_form_is_posted_as_a_form_with_the_session_cookie():
     # urlencoded fields. Sending the JSON body and bearer header the API
     # surfaces use makes the write fail for a reason the application never
     # caused, and the replay then reports a defect that is the harness's.
+    #
+    # The request builder is the one under test here, not the replay: it is the
+    # single place a request is put on the wire, so the cookie has to come from
+    # the token the surface was scanned with regardless of which shape is sent.
     seen = []
 
-    def fake(base, path, method="GET", body=None, token="", form=False, cookie=""):
-        seen.append({"method": method, "body": body, "form": form, "cookie": cookie})
+    def fake(base, path, method="GET", body=None, token="", form=False):
+        seen.append({"method": method, "body": body, "form": form, "cookie": token and form})
         return 200, "ok", {}
 
     original = bench.request
@@ -104,7 +108,7 @@ def test_a_server_rendered_form_is_posted_as_a_form_with_the_session_cookie():
     write = [c for c in seen if c["method"] == "POST"]
     assert len(write) == 1, seen
     assert write[0]["form"] is True
-    assert write[0]["cookie"] == "token=jwt"
+    assert write[0]["cookie"] is True
     assert write[0]["body"] == {
         "username": "<img src=x onerror=alert('ixm1')>",
         "email": "replay@bench.invalid",
@@ -113,11 +117,46 @@ def test_a_server_rendered_form_is_posted_as_a_form_with_the_session_cookie():
     assert [c["method"] for c in seen if c is not write[0]] == ["GET"]
 
 
+def test_the_session_cookie_is_sent_wherever_a_server_rendered_page_is_read():
+    # A Pug page authenticates on ``req.cookies.token`` alone: a bearer header
+    # is the API's plane and leaves the page anonymous. The profile read-back
+    # used to go out without it, so the replay read a login page and reported
+    # a stored payload as absent.
+    wanted = []
+
+    class _Resp:
+        status = 200
+
+        def read(self):
+            return b"ok"
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    def fake_urlopen(req, timeout=20):
+        wanted.append(dict(req.header_items()))
+        return _Resp()
+
+    original = bench.urllib.request.urlopen
+    bench.urllib.request.urlopen = fake_urlopen
+    try:
+        bench.request(BASE, "/profile", "GET", None, "jwt", form=True)
+        bench.request(BASE, "/api/Complaints", "GET", None, "jwt")
+    finally:
+        bench.urllib.request.urlopen = original
+    assert {k.title(): v for k, v in wanted[0].items()}.get("Cookie") == "token=jwt"
+    api = {k.title(): v for k, v in wanted[1].items()}
+    assert "Cookie" not in api, api
+
+
 def test_an_api_surface_is_still_posted_as_json():
     seen = []
 
-    def fake(base, path, method="GET", body=None, token="", form=False, cookie=""):
-        seen.append({"method": method, "form": form, "cookie": cookie})
+    def fake(base, path, method="GET", body=None, token="", form=False):
+        seen.append({"method": method, "form": form, "cookie": token and form})
         return 200, "ok", {}
 
     original = bench.request
@@ -133,7 +172,7 @@ def test_an_api_surface_is_still_posted_as_json():
         bench.request = original
     assert seen, "nothing was sent"
     assert seen[0]["form"] is False
-    assert seen[0]["cookie"] == ""
+    assert seen[0]["cookie"] is False
 
 
 def test_the_tracking_route_is_its_own_surface():

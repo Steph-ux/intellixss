@@ -235,13 +235,13 @@ def request(
     body=None,
     token: str = "",
     form: bool = False,
-    cookie: str = "",
 ) -> tuple[int, str, str]:
     """(status, body, headers) for one request. HTTP errors are returned, not raised.
 
     *form* sends the body as ``application/x-www-form-urlencoded`` — the shape a
-    server-rendered HTML form posts — and *cookie* adds a session cookie, which
-    a login-bound form reads instead of the bearer plane.
+    server-rendered HTML form posts — and carries the bearer token as the
+    session cookie too, because that is how a server-rendered page reads an
+    identity: a cookie only. A bearer header alone is not a session there.
     """
     headers = dict(UA)
     data = None
@@ -254,8 +254,8 @@ def request(
             data = json.dumps(body).encode("utf-8")
     if token:
         headers["Authorization"] = f"Bearer {token}"
-    if cookie:
-        headers["Cookie"] = cookie
+    if token and form:
+        headers["Cookie"] = f"token={token}"
     req = urllib.request.Request(base + path, data=data, headers=headers, method=method)
     try:
         r = urllib.request.urlopen(req, timeout=20)
@@ -361,7 +361,12 @@ async def scan_surface(
     account: dict | None = None,
 ) -> dict:
     """Scan one surface with the stock configuration and return its findings."""
-    cfg = Config(guess_params=True, use_browser=browser)
+    # The bench measures XSS, and every stored sink on the shop is reached by a
+    # write. ``writes`` is part of the stock configuration the harness runs: a
+    # read-only scan is the default for a live target, and on the shop it drops
+    # the very targets — a profile update, a review, a complaint — the surfaces
+    # exist to exercise. The shop is a disposable instance reset between runs.
+    cfg = Config(guess_params=True, use_browser=browser, writes=True)
     auth = AuthConfig()
     if token:
         # The complaint form sits behind a session. The scanner's own bearer
@@ -547,8 +552,7 @@ def reproduce(base: str, surface: dict, finding: dict, token: str, account: dict
     # one shape at the other is how a replay reports a failure the application
     # never caused.
     form = surface["key"] == "profile"
-    cookie = f"token={token}" if form and token else ""
-    status, text, _h = request(base, path, method, body, token, form=form, cookie=cookie)
+    status, text, _h = request(base, path, method, body, token, form=form)
     marker = finding.get("marker") or requests_marker(payload)
     echoed = bool(marker) and marker in text
     # A stored payload is not in this response; it is in the collection the
@@ -567,7 +571,7 @@ def reproduce(base: str, surface: dict, finding: dict, token: str, account: dict
             # The write answers with the profile page it redirects to, and the
             # username input carries the stored value. The markup is the page's
             # own, so the replay reports whether the account *holds* the value.
-            _st, page, _mh = request(base, "/profile", "GET", None, token, cookie=cookie)
+            _st, page, _mh = request(base, "/profile", "GET", None, token, form=True)
             hit = re.search(r'id="username"[^>]*value="([^"]*)"', page or "")
             stored = bool(hit) and payload in html.unescape(hit.group(1))
     return {"status": status, "echoed": echoed, "stored": stored, "marker": marker}
