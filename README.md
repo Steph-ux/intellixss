@@ -71,6 +71,7 @@ report       console, JSON, HTML - all scored from the same CVSS table
 | `--no-adaptive` | Do not back off on 429/503 |
 | `--browser` / `--no-browser` | Enable / skip Playwright confirmation (default on) |
 | `--max-confirm` | Browser navigations per host (default 12) |
+| `--write` | Allow `POST`/`PUT`/`PATCH`/`DELETE` payloads. Off by default |
 | `--deep` | Also run header, redirect, JSON, GraphQL and upload plugins |
 | `-a` / `--aggressive` | Keep going after a hit: all payloads, all parameters |
 | `--guess-params` | Also try conventional parameter names the page never links to |
@@ -112,7 +113,11 @@ An encoded character is not usable syntax. If the target turns `<` into
 - **Browser-owned sources** (`document.referrer`, `window.name`, cookies) are
   seeded before the document parses, so the finding is proven or not.
 - **Stored**, server-side and client-side (form to render), including flows
-  that need login first.
+  that need login first. Writing records is the one destructive thing a scan
+  can do, so it is opt-in: without `--write` no `POST`, `PUT`, `PATCH` or
+  `DELETE` reaches the target, and the browser stages that drive a page's own
+  form still run. The refusal lives in the HTTP client rather than in each
+  plugin, so a new plugin cannot bypass it by forgetting a flag.
 - **AngularJS template injection** when an `ng-app` scope loads a compiler.
   A document whose expressions evaluate but whose scope value is a string can
   be compile-only; the scanner detects this from source shape and says so.
@@ -201,7 +206,7 @@ bundle.
 
 | Documented XSS challenge | Sink | Result |
 |---|---|---|
-| API-only XSS | `PUT /rest/products/1/reviews` | reproduced |
+| API-only XSS | `PUT /rest/products/1/reviews` | stored and echoed; rendered escaped in 20.3.0 |
 | DOM XSS | `GET /#/search?q=` | reproduced |
 | Server-side XSS Protection | `POST /api/Feedbacks` | clean, as expected |
 
