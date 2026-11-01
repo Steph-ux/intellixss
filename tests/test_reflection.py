@@ -386,3 +386,35 @@ def test_event_handler_remnant_without_a_tag_is_not_executable():
     live = f"<div><img src=x onerror=alert('{marker}')></div>"
     ok2, _ = is_payload_effective(live, f"<img src=x onerror=alert('{marker}')>", "html_text")
     assert ok2
+
+
+def test_rawtext_reflection_without_breakout_is_not_executable():
+    """Inside <textarea>/<title>/comment, markup is inert until the element is
+    closed, and that close must survive raw.
+
+    A char-survival metric sees `<script>` and calls it executable; it is not,
+    because it sits in raw text. Surfaced by the benchmark's textarea/title
+    traps, where the closing tag is stripped.
+    """
+    m = "ixmdead01"
+    ta = f"<body><textarea><script>alert('{m}')</script></textarea></body>"
+    assert not is_payload_effective(ta, f"<script>alert('{m}')</script>", "textarea")[0]
+    # Even a payload that *tries* to close is inert when the close is stripped.
+    ta2 = f"<body><textarea>><svg onload=alert('{m}')></textarea></body>"  # </textarea stripped
+    assert not is_payload_effective(ta2, f"</textarea><svg onload=alert('{m}')>", "textarea")[0]
+    # When the close survives raw and a live tag follows, it is executable.
+    real = f"<body><textarea></textarea><svg onload=alert('{m}')></textarea></body>"
+    assert is_payload_effective(real, f"</textarea><svg onload=alert('{m}')>", "textarea")[0]
+
+
+def test_comment_reflection_needs_a_surviving_close():
+    m = "ixmdead01"
+    # Payload never closes the comment: the <svg> stays inside it, inert.
+    trap = f"<body><!--<svg onload=alert('{m}')>--></body>"
+    assert not is_payload_effective(trap, f"<svg onload=alert('{m}')>", "html_comment")[0]
+    # Payload tried to close but `-->` was stripped: no `--><tag` survives raw.
+    trap2 = f"<body><!--<svg onload=alert('{m}')>--></body>"  # --> from payload stripped
+    assert not is_payload_effective(trap2, f"--><svg onload=alert('{m}')>", "html_comment")[0]
+    # The close survives raw, adjacent to a live tag: executable.
+    real = f"<body><!--x--><svg onload=alert('{m}')></body>"
+    assert is_payload_effective(real, f"--><svg onload=alert('{m}')>", "html_comment")[0]

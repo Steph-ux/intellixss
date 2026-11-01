@@ -126,6 +126,17 @@ def is_payload_effective(
     score_dec = reflection_score(decoded, payload)
     ctx = (context_hint or "html_text").lower()
 
+    # --- raw-text elements and comments: must break out first ---
+    # Inside <textarea>/<title> the content is raw text and inside <!-- --> it
+    # is a comment: a <script>/<svg> there is inert until the payload closes the
+    # element (</textarea>, </title>) or the comment (-->). That closing token
+    # has to survive *raw* and sit right before live markup — the element's own
+    # closing tag at the end of the template does not count. A scanner that
+    # scores by character survival sees the tag and calls it executable; it is
+    # not, and this is where "reflected" and "executes" diverge.
+    if ctx in ("textarea", "title", "html_comment"):
+        return _rawtext_executable(payload, response, ctx)
+
     # --- href context: only navigable script URLs ---
     if ctx == "html_attr_href":
         if "javascript:" in payload.lower() and re.search(
@@ -680,6 +691,40 @@ def _js_string_breakout_executable(payload: str, decoded: str, ctx: str) -> bool
     if ctx == "js_code":
         return bool(re.search(r"(?:alert|prompt|confirm)\s*(?:\(|`)", payload, re.I))
     return False
+
+
+def _rawtext_executable(payload: str, response: str, ctx: str):
+    """Executability inside a raw-text element or an HTML comment.
+
+    The only way out is to close the enclosing construct and then open live
+    markup: ``</textarea><svg onload=…>``, ``</title><img …>``, or ``--><svg…>``
+    for a comment. The closing token and the tag that follows it must appear
+    *raw and contiguous* in the response — a target that strips ``</textarea``
+    (or ``-->``) leaves the tag sitting inside the element, inert, even though
+    every character of the payload survived. Matching against the raw bytes,
+    and requiring the close to be adjacent to the opening tag, is what stops an
+    echo in a non-executing context from being read as a finding; the element's
+    own closing tag at the end of the template is never adjacent to the
+    payload's tag, so it cannot satisfy the match.
+    """
+    if ctx == "html_comment":
+        # Close the comment, then open a tag.
+        m = re.search(r"-->\s*<\s*([a-zA-Z][\w-]*)", payload)
+        if not m:
+            return False, "comment_not_broken_out"
+        sig = re.compile(r"-->\s*<\s*" + re.escape(m.group(1)), re.I)
+        if sig.search(response):
+            return True, "comment_breakout"
+        return False, "comment_close_stripped"
+
+    element = ctx  # "textarea" | "title"
+    m = re.search(rf"</\s*{element}\s*>\s*<\s*([a-zA-Z][\w-]*)", payload, re.I)
+    if not m:
+        return False, f"rawtext_{element}_not_broken_out"
+    sig = re.compile(r"</\s*" + element + r"\s*>\s*<\s*" + re.escape(m.group(1)), re.I)
+    if sig.search(response):
+        return True, f"rawtext_{element}_breakout"
+    return False, f"rawtext_{element}_close_stripped"
 
 
 def _attr_breakout_executable(

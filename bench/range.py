@@ -41,6 +41,20 @@ ENDPOINTS = {
         "new URLSearchParams(location.search).get('q');"
         "</script>"
     )),
+    # --- vulnerable: reflection inside a JS template literal ---
+    "hard_js_template": (True, "js_template", "<script>var t=`{q}`;</script>"),
+
+    # --- clean controls: the value's characters survive intact, but the
+    #     context does not execute them. A scanner that scores by character
+    #     survival (XSStrike's Efficiency) or by raw reflection is fooled; a
+    #     state machine plus a browser is not. These are where "it reflected"
+    #     and "it executes" genuinely diverge. ---
+    # Inside <textarea>, markup is rawtext: tags are literal text, only the
+    # closing tag matters, and that is stripped — so nothing parses.
+    "trap_textarea": (False, "rawtext_textarea", "<textarea>{q}</textarea>"),
+    # Same for <title>.
+    "trap_title": (False, "rawtext_title", "<title>{q}</title>"),
+
     # --- vulnerable, harder (tests filter-bypass depth) ---
     # Blocks the two most common tags; a scanner must reach for another.
     "hard_tag_block": (True, "html_text_tagblock", "<div>{q}</div>"),
@@ -98,6 +112,14 @@ def render(name: str, q: str) -> str:
     elif name == "trap_js_escaped":
         safe = q.replace("\\", "\\\\").replace('"', '\\"').replace("<", "\\x3c")
         inner = tmpl.format(q=safe)
+    elif name == "trap_textarea":
+        import re
+
+        inner = tmpl.format(q=re.sub(r"</\s*textarea", "", q, flags=re.I))
+    elif name == "trap_title":
+        import re
+
+        inner = tmpl.format(q=re.sub(r"</\s*title", "", q, flags=re.I))
     else:
         inner = tmpl.format(q=q)
     return PAGE.format(inner=inner)
