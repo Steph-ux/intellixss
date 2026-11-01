@@ -1229,6 +1229,75 @@ async def _guess_reflected_params(
 guess_reflected_params = _guess_reflected_params
 
 
+async def _crawl_pages(client, seed_url, seed_page_url, seed_body, config, add) -> None:
+    """BFS same-origin links from the seed, extracting each page's own inputs.
+
+    For every page reached: its forms (and each field offered as a GET on the
+    page, the way the seed's are), any link that carries a query, and fragment
+    usage — all fed through *add*, which applies the same scope and dedupe rules
+    as the seed pass. Bounded by ``max_crawl_depth`` and ``max_urls`` so a large
+    site cannot run away with the scan.
+    """
+    max_pages = max(1, int(getattr(config, "max_urls", 40)))
+    max_depth = max(1, int(getattr(config, "max_crawl_depth", 2)))
+    visited = {seed_url.split("#")[0], (seed_page_url or seed_url).split("#")[0]}
+
+    def _enqueue(frontier, body, base, depth):
+        if depth > max_depth:
+            return
+        for link in extract_links(body, base):
+            lu = link.split("#")[0]
+            if lu in visited:
+                continue
+            if not _same_scope(link, seed_url):
+                continue
+            if _SKIP_PREFIX.match(link) or _SKIP_EXT.search(link):
+                continue
+            frontier.append((lu, depth))
+
+    frontier: List[tuple] = []
+    _enqueue(frontier, seed_body, seed_page_url, 1)
+
+    while frontier and len(visited) < max_pages:
+        url_c, depth = frontier.pop(0)
+        if url_c in visited:
+            continue
+        visited.add(url_c)
+        try:
+            st, body_c, _h, fin = await client.request("GET", url_c)
+        except Exception:
+            continue
+        if not st or not body_c:
+            continue
+        pu = fin or url_c
+        for form_t in extract_forms(body_c, pu):
+            add(form_t)
+            for name in form_t.params:
+                if name.lower() in _STRUCTURAL_FIELD_NAMES:
+                    continue
+                add(
+                    ScanTarget(
+                        url=pu.split("#")[0],
+                        method="GET",
+                        params=[name],
+                        source="crawl_field_get",
+                    )
+                )
+        for link in extract_links(body_c, pu):
+            if not _same_scope(link, seed_url) or _SKIP_PREFIX.match(link) or _SKIP_EXT.search(link):
+                continue
+            params = extract_params_from_url(link)
+            if params:
+                add(ScanTarget(url=link, method="GET", params=params, source="crawl_link"))
+        if _detect_fragment_usage(body_c):
+            add(
+                ScanTarget(
+                    url=pu.split("#")[0], method="GET", params=["#fragment"], source="crawl_fragment"
+                )
+            )
+        _enqueue(frontier, body_c, pu, depth + 1)
+
+
 async def discover_targets(
     client: HttpClient,
     seed_url: str,
@@ -1345,6 +1414,16 @@ async def discover_targets(
             params = extract_params_from_url(link)
             if params:
                 add(ScanTarget(url=link, method="GET", params=params, source="link"))
+
+        # --- Deep crawl (opt-in): follow same-origin links and extract each
+        #     page's own inputs. The seed pass above only sees the seed's forms
+        #     and the links that already carry a query; a crawl fetches the
+        #     linked pages themselves so a form on /contact or a ``?id=`` on an
+        #     article is scanned too. Bounded by depth and max_urls, and scoped
+        #     the same way as everything else. This is the coverage a one-URL
+        #     scan (Dalfox without piped URLs) never reaches.
+        if config.crawl:
+            await _crawl_pages(client, seed_url, page_url, body, config, add)
 
         # JSON API endpoints discovered in inline JS
         for ep in discover_js_endpoints(body, page_url)[:6]:

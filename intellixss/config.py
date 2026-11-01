@@ -38,6 +38,7 @@ class Config:
     timeout: float = 12.0
     rate_limit: float = 4.0
     max_payloads_per_param: int = 25
+    crawl: bool = False  # follow same-origin links and scan each page's inputs
     max_crawl_depth: int = 2
     max_urls: int = 40
     use_browser: bool = True

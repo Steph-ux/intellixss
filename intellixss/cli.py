@@ -155,6 +155,20 @@ def build_parser() -> argparse.ArgumentParser:
         help="Also run header, redirect, JSON, GraphQL and upload plugins",
     )
     scan.add_argument(
+        "--crawl",
+        action="store_true",
+        help=(
+            "Follow same-origin links from the seed and scan every page's own "
+            "forms and parameters, not just the seed's (depth --crawl-depth)"
+        ),
+    )
+    scan.add_argument(
+        "--crawl-depth",
+        type=int,
+        default=2,
+        help="Link-following depth for --crawl (default 2)",
+    )
+    scan.add_argument(
         "--blind",
         dest="blind_url",
         default="",
@@ -785,6 +799,8 @@ async def async_main(argv: Optional[List[str]] = None) -> int:
         max_confirm_per_host=args.max_confirm,
         blind_url=getattr(args, "blind_url", "") or "",
         blind_header=getattr(args, "blind_header", False),
+        crawl=getattr(args, "crawl", False),
+        max_crawl_depth=getattr(args, "crawl_depth", 2),
     )
 
     if args.jsonl:
