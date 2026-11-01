@@ -261,18 +261,16 @@ reflect safely or not at all — and scores each the same way. Measured run
 
 | Scanner | Recall | Confirmed by execution | False positives | Precision | Time |
 |---------|--------|------------------------|-----------------|-----------|------|
-| **IntelliXSS** | **9/9** | 8/9 | **0/6** | **100%** | **62s** |
-| Dalfox | 9/9 | 9/9 | 3/6 | 75% | 178s |
+| **IntelliXSS** | **9/9** | **9/9** | **0/6** | **100%** | **54s** |
+| Dalfox | 9/9 | 9/9 | 3/6 | 75% | 189s |
 
-Both tools find every vulnerable endpoint. The difference is the clean
-controls: Dalfox reports three reflections that cannot be exploited — a value
-echoed where `<` is stripped, a double-quoted attribute whose quote is escaped,
-a neutralised JS string — while IntelliXSS reports none of them, because a
-reflection is only a finding when the syntax that would execute it survives.
-That is the same rule the rest of the scanner runs on, now measured against
-another tool. The one row IntelliXSS does not confirm (`hard_tag_block`) it
-reports as `found`, not `CONFIRMED` — honest about what its browser did not
-replay rather than claiming the execution.
+Both tools find and execution-confirm every vulnerable endpoint. The difference
+is the clean controls: Dalfox reports three reflections that cannot be
+exploited — a value echoed where `<` is stripped, a double-quoted attribute
+whose quote is escaped, a neutralised JS string — while IntelliXSS reports none
+of them, because a reflection is only a finding when the syntax that would
+execute it survives. That is the same rule the rest of the scanner runs on, now
+measured against another tool, at roughly a third of the wall-clock time.
 
 XSStrike is wired into the same harness (`--with-xsstrike`); run it locally to
 add its column. Full method and per-endpoint results: `benchmark/comparison.md`.

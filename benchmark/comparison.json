@@ -41,7 +41,7 @@
       "vuln_total": 9,
       "false_positives": 0,
       "clean_total": 6,
-      "confirmed": 8,
+      "confirmed": 9,
       "recall": 1.0,
       "precision": 1.0,
       "per_endpoint": {
@@ -75,7 +75,7 @@
         ],
         "hard_tag_block": [
           true,
-          false
+          true
         ],
         "hard_attr_events": [
           true,
@@ -106,7 +106,7 @@
           false
         ]
       },
-      "seconds": 62.0
+      "seconds": 54.3
     },
     "dalfox": {
       "true_positives": 9,
@@ -178,7 +178,7 @@
           false
         ]
       },
-      "seconds": 178.1
+      "seconds": 189.2
     }
   }
 }

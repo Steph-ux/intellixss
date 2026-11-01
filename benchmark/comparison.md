@@ -6,8 +6,8 @@ All scanners were pointed at the identical local range (`bench/range.py`): seven
 
 | Scanner | Recall (found/total) | Confirmed by execution | False positives | Precision | Time |
 |---|---|---|---|---|---|
-| IntelliXSS | 9/9 (100%) | 8/9 | 0/6 | 100% | 62.0s |
-| Dalfox | 9/9 (100%) | 9/9 | 3/6 | 75% | 178.1s |
+| IntelliXSS | 9/9 (100%) | 9/9 | 0/6 | 100% | 54.3s |
+| Dalfox | 9/9 (100%) | 9/9 | 3/6 | 75% | 189.2s |
 
 *Confirmed by execution* means the payload was proven to run (IntelliXSS: the unique marker came back in a headless browser; Dalfox: a `V`/verified PoC). A plain *found* is reflection only.
 
@@ -22,7 +22,7 @@ All scanners were pointed at the identical local range (`bench/range.py`): seven
 | reflect_js | `js_string` | yes | CONFIRMED | CONFIRMED |
 | reflect_filtered | `html_text_filtered` | yes | CONFIRMED | CONFIRMED |
 | dom_query | `dom_query` | yes | CONFIRMED | CONFIRMED |
-| hard_tag_block | `html_text_tagblock` | yes | found | CONFIRMED |
+| hard_tag_block | `html_text_tagblock` | yes | CONFIRMED | CONFIRMED |
 | hard_attr_events | `attr_double_eventblock` | yes | CONFIRMED | CONFIRMED |
 | safe_escaped | `html_text_escaped` | no (control) | ok | ok |
 | safe_attr_escaped | `attr_double_escaped` | no (control) | ok | ok |
