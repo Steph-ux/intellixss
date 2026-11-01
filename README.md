@@ -80,6 +80,7 @@ report       console, JSON, HTML - all scored from the same CVSS table
 | `--max-confirm` | Browser navigations per host (default 12) |
 | `--write` | Allow `POST`/`PUT`/`PATCH`/`DELETE` payloads. Off by default |
 | `--deep` | Also run header, redirect, JSON, GraphQL and upload plugins |
+| `--crawl` | Follow same-origin links from the seed and scan each page's own forms and parameters (depth `--crawl-depth`, default 2) |
 | `--blind URL` | Deliver out-of-band beacon payloads to a collaborator host (interactsh/OAST, XSS Hunter, Burp). Delivered, not confirmed — watch your listener |
 | `--blind-header` | With `--blind`, also inject beacons into request headers |
 | `-a` / `--aggressive` | Keep going after a hit: all payloads, all parameters |
@@ -293,6 +294,16 @@ and strictly better than each on at least one (precision over Dalfox, proof
 over XSStrike), while being the fastest of the three. Reproduce with
 `python bench/compare.py --with-xsstrike ./XSStrike`; full per-endpoint results
 in `benchmark/comparison.md`.
+
+**Discovery (root-only).** The table gives every scanner the exact vulnerable
+URL. The other half of being the best is what each finds given only a site
+**root**. `bench/crawl_range.py` is a site whose reflected XSS is a GET search
+box one link-hop from the index (`/search?q=`). Pointed at the root, only
+IntelliXSS finds and browser-confirms it: `--crawl` follows same-origin links
+and scans each page's own parameters and forms. Dalfox scans the single URL and
+does not crawl; XSStrike's crawler looks for forms and never surfaces the
+link-reachable GET parameter. So on realistic root-only usage IntelliXSS
+reaches an injection point **both** competitors miss.
 
 ## Architecture
 
