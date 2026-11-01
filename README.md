@@ -36,6 +36,7 @@ python intellixss.py -u https://target/ --json > report.json
 # Recon pipeline: feed URLs on stdin (deduplicated, comments skipped)
 gau target.com | python intellixss.py --pipe --json > report.json
 cat urls.txt | python intellixss.py --json      # stdin auto-detected when piped
+gau target.com | python intellixss.py --jsonl | jq -r 'select(.severity=="high")'
 
 # Authenticated
 python intellixss.py -u https://app/ --cookie 'session=abc'
@@ -70,6 +71,7 @@ report       console, JSON, HTML - all scored from the same CVSS table
 | `--pipe` | Read target URLs from stdin, one per line — for recon pipelines |
 | `-o` / `--html` | JSON report path / HTML report path |
 | `--json` | Serialised result on stdout and nothing else |
+| `--jsonl` | Stream one compact JSON object per finding as each URL completes (line-delimited) |
 | `-w` / `-r` | Workers (default 4) / requests per second (default 4) |
 | `--timeout` / `--retries` | Per-request timeout / transient retries |
 | `--max-payloads` | Payloads per parameter per stage (default 25) |

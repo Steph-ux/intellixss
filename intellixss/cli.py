@@ -96,6 +96,14 @@ def build_parser() -> argparse.ArgumentParser:
     out.add_argument(
         "--json", action="store_true", help="Print JSON to stdout and nothing else"
     )
+    out.add_argument(
+        "--jsonl",
+        action="store_true",
+        help=(
+            "Stream one compact JSON object per finding to stdout as each URL "
+            "completes (line-delimited) — for recon pipelines"
+        ),
+    )
 
     perf = p.add_argument_group("performance")
     perf.add_argument("-r", "--rate", type=float, default=4.0, help="Req/s (default 4)")
@@ -534,6 +542,57 @@ def render_blind(result: ScanResult, console: "Console") -> None:
     )
 
 
+def jsonl_lines(result: ScanResult) -> List[dict]:
+    """Compact, line-delimited records for one scanned URL.
+
+    One object per finding, highest severity first, plus one per blind delivery
+    — each tagged with ``kind`` so a pipeline can tell a confirmed/reflected
+    finding from an unconfirmed out-of-band delivery. Flat and compact on
+    purpose: these are meant to be ``grep``/``jq``'d a line at a time, streamed
+    as each URL finishes rather than buffered into one document.
+    """
+    lines: List[dict] = []
+    findings = sorted(
+        result.findings, key=lambda f: f.severity.rank, reverse=True
+    )
+    for f in findings:
+        lines.append(
+            {
+                "kind": "finding",
+                "target_url": result.target_url,
+                "url": f.url,
+                "parameter": f.parameter,
+                "method": f.method,
+                "vulnerability_type": f.vulnerability_type,
+                "context": f.context.value,
+                "severity": f.severity.value,
+                "cvss": f.cvss["score"],
+                "verified_by": f.verified_by,
+                "verified_label": f.verified_label,
+                "browser_confirmed": f.browser_confirmed,
+                "confidence": round(f.confidence, 2),
+                "marker": f.marker,
+                "payload": f.payload,
+                "reproduce": reproduce_command(f),
+            }
+        )
+    for d in result.blind_deliveries:
+        lines.append(
+            {
+                "kind": "blind_delivery",
+                "target_url": result.target_url,
+                "url": d.get("url"),
+                "parameter": d.get("parameter"),
+                "method": d.get("method"),
+                "via": d.get("via"),
+                "verified_label": "UNCONFIRMED",
+                "marker": d.get("marker"),
+                "oob": d.get("oob"),
+            }
+        )
+    return lines
+
+
 def render_plain(result: ScanResult) -> None:
     """Fallback renderer: clean, greppable, no rich."""
     print(f"\n=== Scan summary: {result.target_url} ===")
@@ -712,7 +771,7 @@ async def async_main(argv: Optional[List[str]] = None) -> int:
         # ``--json`` means "machine-readable stdout and nothing else": the
         # scanner's own progress log writes to stdout too, so it has to be
         # silenced here, not only at render time.
-        silent=args.silent or args.json,
+        silent=args.silent or args.json or args.jsonl,
         timeout=args.timeout,
         max_payloads_per_param=args.max_payloads,
         output=args.output,
@@ -727,6 +786,17 @@ async def async_main(argv: Optional[List[str]] = None) -> int:
         blind_url=getattr(args, "blind_url", "") or "",
         blind_header=getattr(args, "blind_header", False),
     )
+
+    if args.jsonl:
+        import json
+
+        code = 0
+        for url in urls:
+            result, rc = await _run_one(url, cfg, quiet=True)
+            code = max(code, rc)
+            for line in jsonl_lines(result):
+                print(json.dumps(line, separators=(",", ":")), flush=True)
+        return code
 
     if args.json:
         results = []
