@@ -7,9 +7,14 @@
     "reflect_js": "js_string",
     "reflect_filtered": "html_text_filtered",
     "dom_query": "dom_query",
+    "hard_tag_block": "html_text_tagblock",
+    "hard_attr_events": "attr_double_eventblock",
     "safe_escaped": "html_text_escaped",
     "safe_attr_escaped": "attr_double_escaped",
-    "safe_noreflect": "no_reflection"
+    "safe_noreflect": "no_reflection",
+    "trap_text_no_lt": "html_text_no_lt",
+    "trap_attr_quote_only": "attr_double_quote_escaped",
+    "trap_js_escaped": "js_string_escaped"
   },
   "vuln": [
     "reflect_html",
@@ -18,20 +23,25 @@
     "reflect_unquoted",
     "reflect_js",
     "reflect_filtered",
-    "dom_query"
+    "dom_query",
+    "hard_tag_block",
+    "hard_attr_events"
   ],
   "clean": [
     "safe_escaped",
     "safe_attr_escaped",
-    "safe_noreflect"
+    "safe_noreflect",
+    "trap_text_no_lt",
+    "trap_attr_quote_only",
+    "trap_js_escaped"
   ],
   "tools": {
     "intellixss": {
-      "true_positives": 7,
-      "vuln_total": 7,
+      "true_positives": 9,
+      "vuln_total": 9,
       "false_positives": 0,
-      "clean_total": 3,
-      "confirmed": 7,
+      "clean_total": 6,
+      "confirmed": 8,
       "recall": 1.0,
       "precision": 1.0,
       "per_endpoint": {
@@ -63,6 +73,14 @@
           true,
           true
         ],
+        "hard_tag_block": [
+          true,
+          false
+        ],
+        "hard_attr_events": [
+          true,
+          true
+        ],
         "safe_escaped": [
           false,
           false
@@ -74,18 +92,30 @@
         "safe_noreflect": [
           false,
           false
+        ],
+        "trap_text_no_lt": [
+          false,
+          false
+        ],
+        "trap_attr_quote_only": [
+          false,
+          false
+        ],
+        "trap_js_escaped": [
+          false,
+          false
         ]
       },
-      "seconds": 38.3
+      "seconds": 62.0
     },
     "dalfox": {
-      "true_positives": 7,
-      "vuln_total": 7,
-      "false_positives": 0,
-      "clean_total": 3,
-      "confirmed": 7,
+      "true_positives": 9,
+      "vuln_total": 9,
+      "false_positives": 3,
+      "clean_total": 6,
+      "confirmed": 9,
       "recall": 1.0,
-      "precision": 1.0,
+      "precision": 0.75,
       "per_endpoint": {
         "reflect_html": [
           true,
@@ -115,6 +145,14 @@
           true,
           true
         ],
+        "hard_tag_block": [
+          true,
+          true
+        ],
+        "hard_attr_events": [
+          true,
+          true
+        ],
         "safe_escaped": [
           false,
           false
@@ -126,9 +164,21 @@
         "safe_noreflect": [
           false,
           false
+        ],
+        "trap_text_no_lt": [
+          true,
+          false
+        ],
+        "trap_attr_quote_only": [
+          true,
+          false
+        ],
+        "trap_js_escaped": [
+          true,
+          false
         ]
       },
-      "seconds": 121.1
+      "seconds": 178.1
     }
   }
 }
