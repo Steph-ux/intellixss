@@ -54,6 +54,12 @@ ENDPOINTS = {
     "trap_textarea": (False, "rawtext_textarea", "<textarea>{q}</textarea>"),
     # Same for <title>.
     "trap_title": (False, "rawtext_title", "<title>{q}</title>"),
+    # Inert containers: with JavaScript enabled a browser never executes markup
+    # inside <noscript>, and <template> content is an inert fragment. The
+    # payload's characters survive intact — a character-survival metric with no
+    # browser flags it — but nothing runs. Only a real browser gets this right.
+    "trap_noscript": (False, "noscript", "<noscript>{q}</noscript>"),
+    "trap_template": (False, "template", "<template>{q}</template>"),
 
     # --- vulnerable, harder (tests filter-bypass depth) ---
     # Blocks the two most common tags; a scanner must reach for another.

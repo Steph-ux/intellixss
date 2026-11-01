@@ -126,6 +126,16 @@ def is_payload_effective(
     score_dec = reflection_score(decoded, payload)
     ctx = (context_hint or "html_text").lower()
 
+    # --- inert containers: <noscript> (scripting enabled) and <template> ---
+    # Their content is held as inert text / an inert fragment: a <script> or an
+    # onerror there never runs until the element is closed, which is exactly
+    # what a headless browser enforces and a character-survival metric cannot
+    # see. A payload inside one is only live if it closes the element and a tag
+    # follows, the same rule as a raw-text element.
+    inert = _inert_container(response, payload)
+    if inert:
+        return _rawtext_executable(payload, response, inert)
+
     # --- raw-text elements and comments: must break out first ---
     # Inside <textarea>/<title> the content is raw text and inside <!-- --> it
     # is a comment: a <script>/<svg> there is inert until the payload closes the
@@ -691,6 +701,29 @@ def _js_string_breakout_executable(payload: str, decoded: str, ctx: str) -> bool
     if ctx == "js_code":
         return bool(re.search(r"(?:alert|prompt|confirm)\s*(?:\(|`)", payload, re.I))
     return False
+
+
+def _inert_container(response: str, payload: str) -> str:
+    """``noscript`` / ``template`` if the payload reflects inside an open one.
+
+    With scripting enabled a browser treats ``<noscript>`` content as raw text,
+    and ``<template>`` content is parsed into an inert fragment: neither runs
+    markup placed in it. Detected by counting the element's unclosed openings
+    before the reflection, so the finding is gated on breaking out of it.
+    """
+    m = re.search(r"ixm[0-9a-f]{6,}", payload or "")
+    needle = m.group(0) if m else (payload or "").strip()[:24]
+    if not needle or not response:
+        return ""
+    low = response.lower()
+    pos = low.find(needle.lower())
+    if pos < 0:
+        return ""
+    head = low[:pos]
+    for el in ("noscript", "template"):
+        if len(re.findall(rf"<{el}\b", head)) > len(re.findall(rf"</{el}\b", head)):
+            return el
+    return ""
 
 
 def _rawtext_executable(payload: str, response: str, ctx: str):

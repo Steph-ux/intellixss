@@ -418,3 +418,21 @@ def test_comment_reflection_needs_a_surviving_close():
     # The close survives raw, adjacent to a live tag: executable.
     real = f"<body><!--x--><svg onload=alert('{m}')></body>"
     assert is_payload_effective(real, f"--><svg onload=alert('{m}')>", "html_comment")[0]
+
+
+def test_inert_container_reflection_is_not_executable():
+    """<noscript> (JS on) and <template> hold inert content: not a finding.
+
+    A character-survival metric sees the payload intact and flags it; a browser
+    never runs it. IntelliXSS must agree with the browser. Surfaced by the
+    benchmark's noscript/template controls, where XSStrike false-positives.
+    """
+    m = "ixmdead01"
+    for el in ("noscript", "template"):
+        body = f"<body><{el}><img src=x onerror=alert('{m}')></{el}></body>"
+        ok, tag = is_payload_effective(body, f"<img src=x onerror=alert('{m}')>", "html_text")
+        assert not ok, f"{el} content wrongly executable: {tag}"
+    # Breaking out of the container (close it, then a live tag) is executable.
+    body = f"<body><noscript></noscript><svg onload=alert('{m}')></body>"
+    ok, _ = is_payload_effective(body, f"</noscript><svg onload=alert('{m}')>", "html_text")
+    assert ok
