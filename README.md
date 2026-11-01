@@ -143,11 +143,17 @@ beacons.
 - **Browser-owned sources** (`document.referrer`, `window.name`, cookies) are
   seeded before the document parses, so the finding is proven or not.
 - **Stored**, server-side and client-side (form to render), including flows
-  that need login first. Writing records is the one destructive thing a scan
-  can do, so it is opt-in: without `--write` no `POST`, `PUT`, `PATCH` or
-  `DELETE` reaches the target, and the browser stages that drive a page's own
-  form still run. The refusal lives in the HTTP client rather than in each
-  plugin, so a new plugin cannot bypass it by forgetting a flag.
+  that need login first, and **including records that surface on a different
+  page from the one that takes the write** — a comment posted to `/comment`
+  that renders on `/posts`. The pass looks for its marker on the same-origin
+  pages the site links to, so it correlates the write and the render without
+  being told where the record appears (the cross-endpoint step a scanner with
+  no stored workflow cannot do, and that others need an explicit trigger URL
+  for). Writing records is the one destructive thing a scan can do, so it is
+  opt-in: without `--write` no `POST`, `PUT`, `PATCH` or `DELETE` reaches the
+  target, and the browser stages that drive a page's own form still run. The
+  refusal lives in the HTTP client rather than in each plugin, so a new plugin
+  cannot bypass it by forgetting a flag.
 - **AngularJS template injection** when an `ng-app` scope loads a compiler.
   A document whose expressions evaluate but whose scope value is a string can
   be compile-only; the scanner detects this from source shape and says so.
