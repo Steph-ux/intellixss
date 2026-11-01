@@ -102,13 +102,17 @@ regex analyser's answer is what the scanner uses there today.
   a lead. The stored plugin itself writes the method it is given
   (`tests/test_stored_refused_field.py`); the gate is the orchestrator's call
   site.
-* **Cross-page stored XSS is detected but not yet browser-confirmed.** A record
-  posted to one endpoint and rendered on another (`/comment` → `/posts`) is now
-  correlated through the site's same-origin links and reported
-  (`tests/test_stored_cross_url.py`), but at reflection confidence: the markup
-  probe that gates confirmation reads the render page after earlier stages have
-  already written their own records to it, and the accumulated records defeat
-  its "did my element survive" check (`_an_element_survives`), so the context is
-  misread and no payload is browser-confirmed there. The finding is never
-  dressed up as confirmed. The fix is to isolate the probe's own record on an
-  accumulating page before judging the sink; it is open.
+* **Cross-page stored XSS is detected, and browser-confirmed when the render
+  page is reached by the crawl and not already polluted.** A record posted to
+  one endpoint and rendered on another (`/comment` → `/posts`) is correlated
+  through the site's same-origin links and, with `--crawl`, through every page
+  the crawl reached (`tests/test_stored_cross_url.py`,
+  `tests/test_crawler.py`). On a site where the render page is not written to by
+  an earlier stage, this now confirms in the browser (the unified
+  `bench/site_range.py` run: the stored sink is `CONFIRMED` across repeated
+  runs). It still falls back to reflection confidence when an earlier stage has
+  already written its own records to the render page: the markup probe that
+  gates confirmation then reads an accumulated page and its "did my element
+  survive" check (`_an_element_survives`) is defeated by the sibling records.
+  The finding is never dressed up as confirmed. Making confirmation robust to a
+  pre-polluted render page (isolate the probe's own record) is the open part.

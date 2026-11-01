@@ -84,3 +84,42 @@ async def test_crawl_discovers_inputs_on_linked_pages():
     assert "/contact" in paths
     # Same-origin only: nothing off-site leaked in.
     assert all("127.0.0.1" in t.url for t in targets)
+
+
+@pytest.mark.asyncio
+async def test_crawl_collects_pages_without_params_for_stored_render():
+    """A crawled page with no parameter of its own is still collected.
+
+    A stored record renders on such a page (a /posts listing), so the stored
+    pass needs it as a render candidate even though it is not an injectable
+    target itself. ``pages_out`` captures every crawled page for that purpose.
+    """
+
+    class _StoredSite(BaseHTTPRequestHandler):
+        def log_message(self, *a):
+            pass
+
+        def _h(self, b):
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html")
+            self.send_header("Content-Length", str(len(b)))
+            self.end_headers()
+            self.wfile.write(b)
+
+        def do_GET(self):
+            p = urlsplit(self.path).path
+            if p == "/":
+                self._h(b"<html><body><a href=/posts>posts</a></body></html>")
+            else:  # /posts has no parameter of its own
+                self._h(b"<html><body><div>listing</div></body></html>")
+
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), _StoredSite)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    base = f"http://127.0.0.1:{srv.server_address[1]}"
+    pages: set = set()
+    try:
+        async with HttpClient(Config(crawl=True)) as c:
+            await discover_targets(c, f"{base}/", Config(crawl=True), pages_out=pages)
+    finally:
+        srv.shutdown()
+    assert any(u.rstrip("/").endswith("/posts") for u in pages)

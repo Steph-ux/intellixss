@@ -1229,7 +1229,7 @@ async def _guess_reflected_params(
 guess_reflected_params = _guess_reflected_params
 
 
-async def _crawl_pages(client, seed_url, seed_page_url, seed_body, config, add) -> None:
+async def _crawl_pages(client, seed_url, seed_page_url, seed_body, config, add, pages_out=None) -> None:
     """BFS same-origin links from the seed, extracting each page's own inputs.
 
     For every page reached: its forms (and each field offered as a GET on the
@@ -1270,6 +1270,11 @@ async def _crawl_pages(client, seed_url, seed_page_url, seed_body, config, add) 
         if not st or not body_c:
             continue
         pu = fin or url_c
+        if pages_out is not None:
+            # Every crawled page is a place a stored record could render, even
+            # one with no parameter of its own (a /posts listing). The stored
+            # pass reads these back looking for its marker.
+            pages_out.add(pu.split("#")[0])
         for form_t in extract_forms(body_c, pu):
             add(form_t)
             for name in form_t.params:
@@ -1302,6 +1307,7 @@ async def discover_targets(
     client: HttpClient,
     seed_url: str,
     config: Config,
+    pages_out=None,
 ) -> List[ScanTarget]:
     """
     Build injectable targets from the seed URL.
@@ -1423,7 +1429,7 @@ async def discover_targets(
         #     the same way as everything else. This is the coverage a one-URL
         #     scan (Dalfox without piped URLs) never reaches.
         if config.crawl:
-            await _crawl_pages(client, seed_url, page_url, body, config, add)
+            await _crawl_pages(client, seed_url, page_url, body, config, add, pages_out)
 
         # JSON API endpoints discovered in inline JS
         for ep in discover_js_endpoints(body, page_url)[:6]:

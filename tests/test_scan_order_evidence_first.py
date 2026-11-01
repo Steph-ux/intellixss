@@ -20,7 +20,7 @@ from intellixss.scanner import orchestrator
 def _run_scan_order() -> list:
     order = []
 
-    async def fake_discover(client, url, config):
+    async def fake_discover(client, url, config, pages_out=None):
         return [
             ScanTarget(url="https://t.test/rest/products/1/reviews", method="PUT", params=["message"])
         ]

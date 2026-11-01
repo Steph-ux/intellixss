@@ -49,6 +49,18 @@ The table above gives every scanner the exact vulnerable URL. The other half of 
 
 IntelliXSS's crawl follows same-origin links and scans each page's parameters and forms, so all three are reached and confirmed; a single-URL scan never leaves the root, and a form-only crawler misses the link-reachable GET params. Reproduce: `python bench/crawl_range.py &` then each command against `http://127.0.0.1:8890/`.
 
+## Whole site, root only — the realistic test
+
+The per-endpoint table hands each tool the exact vulnerable URL; under that artificial condition XSStrike matches IntelliXSS on the reflected endpoints. The real task is a **site**: `bench/site_range.py` puts four XSS behind one root — three reflected (a link param, a filter param, a form two hops deep) and one stored (posted on a guestbook, rendered on `/posts`). Every tool is given only `http://host/`:
+
+| Scanner | Invocation | XSS found |
+|---|---|---|
+| **IntelliXSS** | `-u / --crawl --write` | **4/4, all browser-confirmed** |
+| Dalfox | `url /` | 0/4 |
+| XSStrike | `-u / --crawl` | 0/4 |
+
+Given a site rather than a list of exact injection points, IntelliXSS finds and proves every one; both competitors find none. This is where the reflected-endpoint 'tie' with XSStrike disappears — it depends on being handed the URL, which no real engagement does.
+
 ## Stored XSS (root-only)
 
 Stored XSS is the class that most separates the tools. `bench/stored_range.py` is the real shape of it: a comment posted to `/comment` redirects to `/thanks` (the payload is never echoed back) and renders on a different page, `/posts`, linked from the index. Finding it from the root means correlating *write here* with *renders there*. Pointed at the root:

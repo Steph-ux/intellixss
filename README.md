@@ -300,6 +300,24 @@ and the coverage below.) Reproduce with
 `python bench/compare.py --with-xsstrike ./XSStrike`; per-endpoint results in
 `benchmark/comparison.md`.
 
+**Whole site, root only — the realistic test.** The table above hands each tool
+the exact vulnerable URL, and under that artificial condition XSStrike matches
+IntelliXSS on the reflected endpoints. The real task is a *site*:
+`bench/site_range.py` puts four XSS behind one root — three reflected (a link
+param, a filter param, a form two hops deep) and one stored (posted on a
+guestbook, rendered on `/posts`). Given only `http://host/`:
+
+| Scanner | Invocation | XSS found |
+|---------|-----------|-----------|
+| **IntelliXSS** | `-u / --crawl --write` | **4/4, all browser-confirmed** |
+| Dalfox | `url /` | 0/4 |
+| XSStrike | `-u / --crawl` | 0/4 |
+
+Given a site instead of a list of exact injection points, IntelliXSS finds and
+proves every XSS; both competitors find none. This is where the reflected-endpoint
+tie with XSStrike disappears — it depended on being handed the URL, which no
+real engagement does.
+
 **Discovery (root-only).** The table gives every scanner the exact vulnerable
 URL. The other half of being the best is what each finds given only a site
 **root**. `bench/crawl_range.py` hides three reflected XSS off the index: a

@@ -359,7 +359,10 @@ class Scanner:
                         "warn",
                     )
 
-                targets = await discover_targets(client, target_url, self.config)
+                crawled_pages: set = set()
+                targets = await discover_targets(
+                    client, target_url, self.config, pages_out=crawled_pages
+                )
                 self._log(f"{len(targets)} injectable target(s) discovered", "info")
 
                 sem = asyncio.Semaphore(max(1, self.config.workers))
@@ -391,6 +394,11 @@ class Scanner:
                 # a tool without it (XSStrike) and one needing an explicit
                 # --trigger (Dalfox) cannot do automatically.
                 render_pages = self._stored_render_pages(target_url, body, targets)
+                # Pages the crawl reached (a /posts listing with no parameter of
+                # its own among them) are also places a stored record surfaces.
+                for pg in sorted(crawled_pages):
+                    if pg not in render_pages:
+                        render_pages.append(pg)
                 await self._stored_pass(
                     client, target_url, targets, result, lock, render_pages
                 )

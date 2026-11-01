@@ -100,6 +100,27 @@ def main() -> int:
         "&` then each command against `http://127.0.0.1:8890/`.\n"
     )
 
+    out.append("## Whole site, root only — the realistic test\n")
+    out.append(
+        "The per-endpoint table hands each tool the exact vulnerable URL; under "
+        "that artificial condition XSStrike matches IntelliXSS on the reflected "
+        "endpoints. The real task is a **site**: `bench/site_range.py` puts four "
+        "XSS behind one root — three reflected (a link param, a filter param, a "
+        "form two hops deep) and one stored (posted on a guestbook, rendered on "
+        "`/posts`). Every tool is given only `http://host/`:\n"
+    )
+    out.append("| Scanner | Invocation | XSS found |")
+    out.append("|---|---|---|")
+    out.append("| **IntelliXSS** | `-u / --crawl --write` | **4/4, all browser-confirmed** |")
+    out.append("| Dalfox | `url /` | 0/4 |")
+    out.append("| XSStrike | `-u / --crawl` | 0/4 |")
+    out.append(
+        "\nGiven a site rather than a list of exact injection points, IntelliXSS "
+        "finds and proves every one; both competitors find none. This is where "
+        "the reflected-endpoint 'tie' with XSStrike disappears — it depends on "
+        "being handed the URL, which no real engagement does.\n"
+    )
+
     out.append("## Stored XSS (root-only)\n")
     out.append(
         "Stored XSS is the class that most separates the tools. "
