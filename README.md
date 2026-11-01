@@ -33,6 +33,10 @@ python intellixss.py -u https://target/ --deep -w 6 -r 6 -o report.json --html r
 # Machine-readable output on stdout
 python intellixss.py -u https://target/ --json > report.json
 
+# Recon pipeline: feed URLs on stdin (deduplicated, comments skipped)
+gau target.com | python intellixss.py --pipe --json > report.json
+cat urls.txt | python intellixss.py --json      # stdin auto-detected when piped
+
 # Authenticated
 python intellixss.py -u https://app/ --cookie 'session=abc'
 python intellixss.py -u https://app/ --bearer eyJ...
@@ -62,7 +66,8 @@ report       console, JSON, HTML - all scored from the same CVSS table
 
 | Flag | Meaning |
 |------|---------|
-| `-u` / `-l` | Target URL / file of URLs, one per line |
+| `-u` / `-l` | Target URL / file of URLs, one per line (`-l -` reads stdin) |
+| `--pipe` | Read target URLs from stdin, one per line — for recon pipelines |
 | `-o` / `--html` | JSON report path / HTML report path |
 | `--json` | Serialised result on stdout and nothing else |
 | `-w` / `-r` | Workers (default 4) / requests per second (default 4) |

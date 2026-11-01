@@ -79,7 +79,16 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     p.add_argument("-u", "--url", help="Target URL (path-scoped discovery)")
-    p.add_argument("-l", "--list", help="File with URLs (one per line)")
+    p.add_argument(
+        "-l",
+        "--list",
+        help="File with URLs (one per line); '-' reads from stdin",
+    )
+    p.add_argument(
+        "--pipe",
+        action="store_true",
+        help="Read target URLs from stdin, one per line (for recon pipelines)",
+    )
 
     out = p.add_argument_group("reporting")
     out.add_argument("-o", "--output", help="Write JSON report to path")
@@ -553,6 +562,36 @@ def _say(msg: str, quiet: bool) -> None:
         print(f"{Fore.CYAN}{msg}{Style.RESET_ALL}")
 
 
+def _parse_url_lines(text: str) -> List[str]:
+    """URLs from a newline-separated blob, skipping blanks and ``#`` comments.
+
+    Shared by ``-l <file>`` and the stdin pipe so both accept the same format a
+    recon tool emits (one URL per line, comments allowed).
+    """
+    out: List[str] = []
+    for raw in text.splitlines():
+        line = raw.strip()
+        if line and not line.startswith("#"):
+            out.append(line)
+    return out
+
+
+def _dedupe_preserving_order(urls: List[str]) -> List[str]:
+    """Drop duplicate URLs while keeping first-seen order.
+
+    A pipeline that feeds ``gau``/``waybackurls`` output routinely repeats the
+    same URL hundreds of times; scanning each once is both correct and a large
+    time saving, and order is preserved so output stays predictable.
+    """
+    seen: set = set()
+    out: List[str] = []
+    for u in urls:
+        if u not in seen:
+            seen.add(u)
+            out.append(u)
+    return out
+
+
 async def async_main(argv: Optional[List[str]] = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -560,16 +599,29 @@ async def async_main(argv: Optional[List[str]] = None) -> int:
     urls: List[str] = []
     if args.url:
         urls.append(args.url)
-    if args.list:
+    if args.list and args.list != "-":
         path = Path(args.list)
         if not path.is_file():
             print(f"{Fore.RED}URL list not found: {args.list}{Style.RESET_ALL}")
             return 1
-        urls.extend(
-            line.strip()
-            for line in path.read_text(encoding="utf-8", errors="replace").splitlines()
-            if line.strip() and not line.strip().startswith("#")
-        )
+        urls.extend(_parse_url_lines(path.read_text(encoding="utf-8", errors="replace")))
+
+    # Stdin: either asked for explicitly (``--pipe`` / ``-l -``) or detected
+    # because stdin is a pipe and no target was named on the command line. The
+    # auto-detect is what lets ``cat urls.txt | intellixss`` work with no flag,
+    # the way a recon pipeline expects — but only when nothing else gave a URL,
+    # so an interactive run with no args still prints help instead of blocking
+    # on a read.
+    want_stdin = args.pipe or args.list == "-"
+    if not want_stdin and not urls and not sys.stdin.isatty():
+        want_stdin = True
+    if want_stdin:
+        try:
+            urls.extend(_parse_url_lines(sys.stdin.read()))
+        except Exception:
+            pass
+
+    urls = _dedupe_preserving_order(urls)
     if not urls:
         parser.print_help()
         return 1
