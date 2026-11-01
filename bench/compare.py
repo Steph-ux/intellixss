@@ -85,10 +85,15 @@ def run_dalfox(base: str, name: str, binpath: str, timeout: int) -> tuple[bool, 
         return False, False
 
 
-# XSStrike has no machine-readable output; these markers are its own success
-# lines (ANSI stripped). It never "confirms" by execution, so confirmed=False.
-_XSS_HIT = re.compile(r"payload:|indicator|vulnerable|reflections? found", re.I)
-_XSS_MISS = re.compile(r"no reflection|not reflect|0 reflection", re.I)
+# XSStrike has no machine-readable output. Its own verdict for a reflected
+# vector is *Efficiency* — the percentage of a payload that survives the
+# target's filtering; 100 means a fully-unfiltered, working payload. That is
+# the fair bar: "reflections found" is only its recon line and fires on any
+# echo, escaped or not, so keying on it would invent false positives XSStrike
+# never claimed. A DOM finding is reported separately. XSStrike never executes
+# a payload, so it never "confirms" (confirmed=False always).
+_XSS_EFF100 = re.compile(r"Efficiency:\s*100\b")
+_XSS_DOM = re.compile(r"Potentially vulnerable objects found|DOM XSS", re.I)
 
 
 def run_xsstrike(base: str, name: str, xdir: str, timeout: int) -> tuple[bool, bool]:
@@ -99,7 +104,7 @@ def run_xsstrike(base: str, name: str, xdir: str, timeout: int) -> tuple[bool, b
             capture_output=True, text=True, timeout=timeout, cwd=xdir,
         ).stdout
         clean = re.sub(r"\x1b\[[0-9;]*m", "", out)
-        hit = bool(_XSS_HIT.search(clean)) and not _XSS_MISS.search(clean)
+        hit = bool(_XSS_EFF100.search(clean)) or bool(_XSS_DOM.search(clean))
         return hit, False
     except Exception as e:  # noqa: BLE001
         print(f"    xsstrike error on {name}: {e}", file=sys.stderr)
