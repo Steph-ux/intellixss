@@ -61,6 +61,12 @@ class Config:
     output: Optional[str] = None
     html_report: Optional[str] = None
     callback_url: str = ""
+    # Out-of-band (blind) XSS: an operator-controlled collaborator host
+    # (interactsh / OAST, XSS Hunter, Burp Collaborator). When set, beacon
+    # payloads are delivered to injection points and recorded as deliveries —
+    # never auto-confirmed, since the scanner cannot observe an OOB hit.
+    blind_url: str = ""
+    blind_header: bool = False  # also inject blind beacons into request headers
     # Resolved lazily to keep intellixss.config <-> intellixss.auth acyclic.
     auth: "AuthConfig" = field(default_factory=_default_auth)
 

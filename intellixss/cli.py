@@ -147,6 +147,22 @@ def build_parser() -> argparse.ArgumentParser:
         help="Also run header, redirect, JSON, GraphQL and upload plugins",
     )
     scan.add_argument(
+        "--blind",
+        dest="blind_url",
+        default="",
+        metavar="URL",
+        help=(
+            "Out-of-band (blind) XSS: deliver beacon payloads to an operator "
+            "collaborator host (interactsh/OAST, XSS Hunter, Burp). Delivered, "
+            "not confirmed — watch your listener for the ixm... marker"
+        ),
+    )
+    scan.add_argument(
+        "--blind-header",
+        action="store_true",
+        help="With --blind, also inject blind beacons into request headers",
+    )
+    scan.add_argument(
         "--write",
         dest="writes",
         action="store_true",
@@ -663,6 +679,8 @@ async def async_main(argv: Optional[List[str]] = None) -> int:
         retries=args.retries,
         adaptive_throttle=args.adaptive,
         max_confirm_per_host=args.max_confirm,
+        blind_url=getattr(args, "blind_url", "") or "",
+        blind_header=getattr(args, "blind_header", False),
     )
 
     if args.json:

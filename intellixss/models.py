@@ -471,6 +471,11 @@ class ScanResult:
     # Records the scan created on the target and what became of them. Empty on
     # a read-only scan, which creates nothing.
     cleanup: List[Dict[str, Any]] = field(default_factory=list)
+    # Blind / out-of-band beacon payloads delivered to injection points. Each
+    # entry names the point and the correlation marker; none is a confirmed
+    # finding — execution happens out of band, where the operator's collaborator
+    # observes it. Empty unless ``--blind`` was given.
+    blind_deliveries: List[Dict[str, Any]] = field(default_factory=list)
 
     @property
     def confirmed(self) -> List[XSSFinding]:
@@ -503,6 +508,7 @@ class ScanResult:
             "targets_tested": self.targets_tested,
             "errors": self.errors,
             "cleanup": self.cleanup,
+            "blind_deliveries": self.blind_deliveries,
         }
 
 
