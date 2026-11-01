@@ -106,7 +106,7 @@
           false
         ]
       },
-      "seconds": 54.3
+      "seconds": 57.2
     },
     "dalfox": {
       "true_positives": 9,
@@ -178,7 +178,79 @@
           false
         ]
       },
-      "seconds": 189.2
+      "seconds": 192.9
+    },
+    "xsstrike": {
+      "true_positives": 9,
+      "vuln_total": 9,
+      "false_positives": 0,
+      "clean_total": 6,
+      "confirmed": 0,
+      "recall": 1.0,
+      "precision": 1.0,
+      "per_endpoint": {
+        "reflect_html": [
+          true,
+          false
+        ],
+        "reflect_attr": [
+          true,
+          false
+        ],
+        "reflect_attr_sq": [
+          true,
+          false
+        ],
+        "reflect_unquoted": [
+          true,
+          false
+        ],
+        "reflect_js": [
+          true,
+          false
+        ],
+        "reflect_filtered": [
+          true,
+          false
+        ],
+        "dom_query": [
+          true,
+          false
+        ],
+        "hard_tag_block": [
+          true,
+          false
+        ],
+        "hard_attr_events": [
+          true,
+          false
+        ],
+        "safe_escaped": [
+          false,
+          false
+        ],
+        "safe_attr_escaped": [
+          false,
+          false
+        ],
+        "safe_noreflect": [
+          false,
+          false
+        ],
+        "trap_text_no_lt": [
+          false,
+          false
+        ],
+        "trap_attr_quote_only": [
+          false,
+          false
+        ],
+        "trap_js_escaped": [
+          false,
+          false
+        ]
+      },
+      "seconds": 77.2
     }
   }
 }

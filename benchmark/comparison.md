@@ -6,30 +6,31 @@ All scanners were pointed at the identical local range (`bench/range.py`): seven
 
 | Scanner | Recall (found/total) | Confirmed by execution | False positives | Precision | Time |
 |---|---|---|---|---|---|
-| IntelliXSS | 9/9 (100%) | 9/9 | 0/6 | 100% | 54.3s |
-| Dalfox | 9/9 (100%) | 9/9 | 3/6 | 75% | 189.2s |
+| IntelliXSS | 9/9 (100%) | 9/9 | 0/6 | 100% | 57.2s |
+| Dalfox | 9/9 (100%) | 9/9 | 3/6 | 75% | 192.9s |
+| XSStrike | 9/9 (100%) | 0/9 | 0/6 | 100% | 77.2s |
 
 *Confirmed by execution* means the payload was proven to run (IntelliXSS: the unique marker came back in a headless browser; Dalfox: a `V`/verified PoC). A plain *found* is reflection only.
 
 ## Per-endpoint
 
-| Endpoint | Context | Vulnerable? | IntelliXSS | Dalfox |
-|---|---|---|---|---|
-| reflect_html | `html_text` | yes | CONFIRMED | CONFIRMED |
-| reflect_attr | `attr_double` | yes | CONFIRMED | CONFIRMED |
-| reflect_attr_sq | `attr_single` | yes | CONFIRMED | CONFIRMED |
-| reflect_unquoted | `attr_unquoted` | yes | CONFIRMED | CONFIRMED |
-| reflect_js | `js_string` | yes | CONFIRMED | CONFIRMED |
-| reflect_filtered | `html_text_filtered` | yes | CONFIRMED | CONFIRMED |
-| dom_query | `dom_query` | yes | CONFIRMED | CONFIRMED |
-| hard_tag_block | `html_text_tagblock` | yes | CONFIRMED | CONFIRMED |
-| hard_attr_events | `attr_double_eventblock` | yes | CONFIRMED | CONFIRMED |
-| safe_escaped | `html_text_escaped` | no (control) | ok | ok |
-| safe_attr_escaped | `attr_double_escaped` | no (control) | ok | ok |
-| safe_noreflect | `no_reflection` | no (control) | ok | ok |
-| trap_text_no_lt | `html_text_no_lt` | no (control) | ok | **false +** |
-| trap_attr_quote_only | `attr_double_quote_escaped` | no (control) | ok | **false +** |
-| trap_js_escaped | `js_string_escaped` | no (control) | ok | **false +** |
+| Endpoint | Context | Vulnerable? | IntelliXSS | Dalfox | XSStrike |
+|---|---|---|---|---|---|
+| reflect_html | `html_text` | yes | CONFIRMED | CONFIRMED | found |
+| reflect_attr | `attr_double` | yes | CONFIRMED | CONFIRMED | found |
+| reflect_attr_sq | `attr_single` | yes | CONFIRMED | CONFIRMED | found |
+| reflect_unquoted | `attr_unquoted` | yes | CONFIRMED | CONFIRMED | found |
+| reflect_js | `js_string` | yes | CONFIRMED | CONFIRMED | found |
+| reflect_filtered | `html_text_filtered` | yes | CONFIRMED | CONFIRMED | found |
+| dom_query | `dom_query` | yes | CONFIRMED | CONFIRMED | found |
+| hard_tag_block | `html_text_tagblock` | yes | CONFIRMED | CONFIRMED | found |
+| hard_attr_events | `attr_double_eventblock` | yes | CONFIRMED | CONFIRMED | found |
+| safe_escaped | `html_text_escaped` | no (control) | ok | ok | ok |
+| safe_attr_escaped | `attr_double_escaped` | no (control) | ok | ok | ok |
+| safe_noreflect | `no_reflection` | no (control) | ok | ok | ok |
+| trap_text_no_lt | `html_text_no_lt` | no (control) | ok | **false +** | ok |
+| trap_attr_quote_only | `attr_double_quote_escaped` | no (control) | ok | **false +** | ok |
+| trap_js_escaped | `js_string_escaped` | no (control) | ok | **false +** | ok |
 
 ## Reproduce
 
