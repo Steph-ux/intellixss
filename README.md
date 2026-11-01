@@ -334,13 +334,16 @@ severe XSS class, and it is where the reflected-endpoint parity with XSStrike
 ends. Given each tool its *best* stored shot (`bench/stored_compare.py`) against
 a cross-page board (post `/comment` → render `/posts`): **IntelliXSS** detects
 it (`-u / --write --crawl` — crawls to `/posts`, correlates write with render);
-**XSStrike** cannot, by construction (no inject-here/verify-there mode); and
-**Dalfox**, even handed the exact trigger (`sxss --trigger /posts`), did not
-finish within 150s. So on a corpus that includes stored XSS, recall is
-**IntelliXSS 11/11, Dalfox 10/11, XSStrike 10/11** — a strict recall win over
-both. (Cross-page stored is reported at reflection confidence when the render
-page was already written to by an earlier stage; it browser-confirms otherwise,
-e.g. the whole-site run above — see `AUDIT.md`.)
+**XSStrike** cannot, by construction (no inject-here/verify-there mode) — a
+completed miss; and **Dalfox**'s dedicated `sxss` mode, even handed the exact
+trigger, did not finish in 320s (still grinding 672 queries on one worker),
+so its stored result is *undetermined* — not scored as a miss, but a real
+usability failure on a one-form board. So on a corpus that includes stored XSS,
+recall against XSStrike is **IntelliXSS 11/11 vs 10/11** — a strict recall win,
+since stored XSS is a class XSStrike structurally cannot test. (Cross-page
+stored is reported at reflection confidence when the render page was already
+written to by an earlier stage; it browser-confirms otherwise, e.g. the
+whole-site run above — see `AUDIT.md`.)
 
 ## Architecture
 
