@@ -1,0 +1,134 @@
+{
+  "endpoints": {
+    "reflect_html": "html_text",
+    "reflect_attr": "attr_double",
+    "reflect_attr_sq": "attr_single",
+    "reflect_unquoted": "attr_unquoted",
+    "reflect_js": "js_string",
+    "reflect_filtered": "html_text_filtered",
+    "dom_query": "dom_query",
+    "safe_escaped": "html_text_escaped",
+    "safe_attr_escaped": "attr_double_escaped",
+    "safe_noreflect": "no_reflection"
+  },
+  "vuln": [
+    "reflect_html",
+    "reflect_attr",
+    "reflect_attr_sq",
+    "reflect_unquoted",
+    "reflect_js",
+    "reflect_filtered",
+    "dom_query"
+  ],
+  "clean": [
+    "safe_escaped",
+    "safe_attr_escaped",
+    "safe_noreflect"
+  ],
+  "tools": {
+    "intellixss": {
+      "true_positives": 7,
+      "vuln_total": 7,
+      "false_positives": 0,
+      "clean_total": 3,
+      "confirmed": 7,
+      "recall": 1.0,
+      "precision": 1.0,
+      "per_endpoint": {
+        "reflect_html": [
+          true,
+          true
+        ],
+        "reflect_attr": [
+          true,
+          true
+        ],
+        "reflect_attr_sq": [
+          true,
+          true
+        ],
+        "reflect_unquoted": [
+          true,
+          true
+        ],
+        "reflect_js": [
+          true,
+          true
+        ],
+        "reflect_filtered": [
+          true,
+          true
+        ],
+        "dom_query": [
+          true,
+          true
+        ],
+        "safe_escaped": [
+          false,
+          false
+        ],
+        "safe_attr_escaped": [
+          false,
+          false
+        ],
+        "safe_noreflect": [
+          false,
+          false
+        ]
+      },
+      "seconds": 38.3
+    },
+    "dalfox": {
+      "true_positives": 7,
+      "vuln_total": 7,
+      "false_positives": 0,
+      "clean_total": 3,
+      "confirmed": 7,
+      "recall": 1.0,
+      "precision": 1.0,
+      "per_endpoint": {
+        "reflect_html": [
+          true,
+          true
+        ],
+        "reflect_attr": [
+          true,
+          true
+        ],
+        "reflect_attr_sq": [
+          true,
+          true
+        ],
+        "reflect_unquoted": [
+          true,
+          true
+        ],
+        "reflect_js": [
+          true,
+          true
+        ],
+        "reflect_filtered": [
+          true,
+          true
+        ],
+        "dom_query": [
+          true,
+          true
+        ],
+        "safe_escaped": [
+          false,
+          false
+        ],
+        "safe_attr_escaped": [
+          false,
+          false
+        ],
+        "safe_noreflect": [
+          false,
+          false
+        ]
+      },
+      "seconds": 121.1
+    }
+  }
+}
