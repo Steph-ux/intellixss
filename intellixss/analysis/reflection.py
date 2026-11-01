@@ -685,40 +685,85 @@ def _attr_breakout_executable(
             return False
         body = response
 
-    # Event-handler breakout reflected as distinctive unit
+    # Event-handler breakout reflected as distinctive unit.
+    #
+    # The structural match is against the *raw* response, not the entity-decoded
+    # body: the delimiter quote and the handler have to survive unescaped to end
+    # the attribute. A target that escapes " to &quot; reflects `" onfocus=` as
+    # `&quot; onfocus=` — decoding that back to `" onfocus=` would read the
+    # neutralised quote as a real breakout, which is the false positive this
+    # guards against. ``_distinctive_reflection`` still runs against ``body`` as
+    # a presence check (the payload did reflect somewhere); only the delimiter
+    # structure is held to the raw bytes.
     if re.search(r"""["']\s*on[a-z]+\s*=""", payload, re.I):
         for m in re.finditer(
             r"""(["'])\s*(on[a-z]+)\s*=\s*(?:(["']?)(alert|prompt|confirm)|)""",
             payload,
             re.I,
         ):
-            # at least quote+handler in body
+            # at least quote+handler in the raw response
             if re.search(
-                rf"""{re.escape(m.group(1))}\s*{m.group(2)}\s*=""", body, re.I
+                rf"""{re.escape(m.group(1))}\s*{m.group(2)}\s*=""", response, re.I
             ) and _distinctive_reflection(payload, body):
                 # prefer alert binding when payload has it
                 if re.search(r"(?:alert|prompt|confirm)", payload, re.I):
                     if re.search(
-                        rf"{m.group(2)}\s*=\s*(?:alert|prompt|confirm)", body, re.I
+                        rf"{m.group(2)}\s*=\s*(?:alert|prompt|confirm)", response, re.I
                     ):
                         return True
                 else:
                     return True
-        # " onmouseover="alert(1) full payload
-        if payload in body or payload.strip() in body:
+        # " onmouseover="alert(1) full payload, delimiter intact in raw bytes
+        if payload in response or payload.strip() in response:
             return True
 
     # Tag injection after closing quote: "><img ...
-    if re.search(r"""["']\s*>""", payload) and (
-        payload in body or _distinctive_reflection(payload, body)
-    ):
-        if '"><' in body or "'><" in body or re.search(r"""["']\s*>\s*<""", body):
+    #
+    # The quote that closes the attribute has to survive *unencoded*, or the
+    # tag never escapes the value. A target that turns " into &quot; leaves
+    # `"><script>` reflected as `&quot;><script>`: the script sits inside the
+    # attribute and never parses. The old check looked for `"><` anywhere in
+    # the body, which also matches the page's own `value="...">` markup — so a
+    # safely-escaped reflection was read as a breakout. Instead require the
+    # payload's *own* signature — its literal quote, then `>`, then the tag it
+    # opens — to appear in the body, anchored to the payload's marker where one
+    # exists, so an ambient `"><tag` elsewhere on the page cannot stand in for a
+    # breakout that did not happen.
+    #
+    # The signature is matched against the *raw* response, never the
+    # entity-decoded one: inside value="...", &quot; decodes to a " that is
+    # part of the value's text, not a delimiter that ends the attribute. Judging
+    # the breakout on the decoded body would read that escaped quote as a real
+    # one — exactly the false positive this guards against.
+    mbo = re.search(r"""(["'])\s*>\s*<\s*([a-zA-Z][\w-]*)""", payload)
+    if mbo and (payload in body or _distinctive_reflection(payload, body)):
+        quote = re.escape(mbo.group(1))
+        tag = re.escape(mbo.group(2))
+        marker = re.search(r"ixm[0-9a-f]{6,}", payload)
+        if marker:
+            sig = re.compile(
+                quote + r"""\s*>\s*<\s*""" + tag + r""".{0,300}?""" + re.escape(marker.group(0)),
+                re.I | re.S,
+            )
+        else:
+            sig = re.compile(quote + r"""\s*>\s*<\s*""" + tag, re.I)
+        if sig.search(response):
             return True
 
-    if re.search(r"""["']\s*(?:autofocus\s+)?on[a-z]+""", payload, re.I) and (
+    # Quote break-out into an attribute/event (``" autofocus onfocus=alert``).
+    # Held to the raw response and anchored to the delimiter quote: the handler
+    # binding must follow a *raw* quote that ended the attribute. Matching the
+    # decoded body here (as this branch once did) let an escaped `&quot;` —
+    # which never ends the attribute — stand in for a break-out, flagging a
+    # value that only reflected safely inside quotes.
+    if re.search(r"""["']\s*(?:[a-z]+\s+)*on[a-z]+""", payload, re.I) and (
         payload in body or _distinctive_reflection(payload, body)
     ):
-        if re.search(r"""\bon[a-z]+\s*=\s*(?:alert|prompt|confirm)""", body, re.I):
+        if re.search(
+            r"""["']\s*(?:[a-z-]+(?:=\S*)?\s+)*on[a-z]+\s*=\s*(?:alert|prompt|confirm)""",
+            response,
+            re.I,
+        ):
             return True
 
     return False

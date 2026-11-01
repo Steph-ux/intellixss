@@ -332,3 +332,39 @@ def test_img_onerror_alert_confirmed_when_distinctive_binding_present():
     body = f"<html><body>{payload}</body></html>"
     ok, tag = is_payload_effective(body, payload, "html_text")
     assert ok, tag
+
+
+# --- precision: a quoted-attribute reflection is only a finding if the
+#     delimiter quote itself survives raw (surfaced by the scanner benchmark) ---
+
+def test_attr_quote_escaped_is_not_a_breakout():
+    """`"` encoded to `&quot;` cannot end a double-quoted attribute.
+
+    The payload's `"` is the only thing that could close value="..." and let the
+    tag parse; when the target returns it as `&quot;`, the markup is inert text
+    inside the value. Entity-decoding the body would turn `&quot;` back into a
+    `"` and read a break-out that never happens, so the check must hold to the
+    raw bytes. This is the false positive the three-way benchmark caught.
+    """
+    marker = "ixmdeadbe"
+    for payload in (
+        f'"><script>alert(\'{marker}\')</script>',
+        f'<xss title="x" onfocus=alert(\'{marker}\')>',
+        f'" autofocus onfocus=alert(\'{marker}\')',
+    ):
+        escaped = payload.replace('"', "&quot;")
+        body = f'<input type=text value="{escaped}">'
+        ok, tag = is_payload_effective(body, payload, "html_attr_double")
+        assert not ok, f"escaped quote wrongly read as breakout: {payload!r} -> {tag}"
+
+
+def test_attr_breakout_with_raw_quote_is_executable():
+    """When the quote survives raw, the same payloads are real break-outs."""
+    marker = "ixmdeadbe"
+    for payload in (
+        f'"><svg onload=alert(\'{marker}\')>',
+        f'" autofocus onfocus=alert(\'{marker}\')',
+    ):
+        body = f'<input type=text value="{payload}">'  # quote reflected raw
+        ok, _tag = is_payload_effective(body, payload, "html_attr_double")
+        assert ok, f"raw-quote breakout missed: {payload!r}"
