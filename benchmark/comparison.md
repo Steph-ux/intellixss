@@ -6,9 +6,9 @@ All scanners were pointed at the identical local range (`bench/range.py`): seven
 
 | Scanner | Recall (found/total) | Confirmed by execution | False positives | Precision | Time |
 |---|---|---|---|---|---|
-| IntelliXSS | 9/9 (100%) | 9/9 | 0/6 | 100% | 57.2s |
-| Dalfox | 9/9 (100%) | 9/9 | 3/6 | 75% | 192.9s |
-| XSStrike | 9/9 (100%) | 0/9 | 0/6 | 100% | 77.2s |
+| IntelliXSS | 10/10 (100%) | 10/10 | 0/8 | 100% | 67.2s |
+| Dalfox | 10/10 (100%) | 10/10 | 5/8 | 67% | 211.0s |
+| XSStrike | 10/10 (100%) | 0/10 | 0/8 | 100% | 100.4s |
 
 *Confirmed by execution* means the payload was proven to run (IntelliXSS: the unique marker came back in a headless browser; Dalfox: a `V`/verified PoC). A plain *found* is reflection only.
 
@@ -23,6 +23,9 @@ All scanners were pointed at the identical local range (`bench/range.py`): seven
 | reflect_js | `js_string` | yes | CONFIRMED | CONFIRMED | found |
 | reflect_filtered | `html_text_filtered` | yes | CONFIRMED | CONFIRMED | found |
 | dom_query | `dom_query` | yes | CONFIRMED | CONFIRMED | found |
+| hard_js_template | `js_template` | yes | CONFIRMED | CONFIRMED | found |
+| trap_textarea | `rawtext_textarea` | no (control) | ok | **false +** | ok |
+| trap_title | `rawtext_title` | no (control) | ok | **false +** | ok |
 | hard_tag_block | `html_text_tagblock` | yes | CONFIRMED | CONFIRMED | found |
 | hard_attr_events | `attr_double_eventblock` | yes | CONFIRMED | CONFIRMED | found |
 | safe_escaped | `html_text_escaped` | no (control) | ok | ok | ok |

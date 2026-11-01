@@ -255,35 +255,38 @@ Full method, per-surface results and the reason for each miss:
 ### Versus Dalfox and XSStrike
 
 A labelled range (`bench/range.py`) points every scanner at the identical
-endpoints — nine exploitable across distinct contexts, six clean controls that
-reflect safely or not at all — and scores each the same way. Measured run
-(`python bench/compare.py`):
+endpoints — ten exploitable across distinct contexts, eight clean controls that
+reflect safely or not at all — and scores each the same way. XSStrike is scored
+by its own `Efficiency` metric (a payload at 100 = working), not its recon
+lines, so the comparison is fair to it. Measured run
+(`python bench/compare.py --with-xsstrike ./XSStrike`):
 
 | Scanner | Recall | Confirmed by execution | False positives | Precision | Time |
 |---------|--------|------------------------|-----------------|-----------|------|
-| **IntelliXSS** | **9/9** | **9/9** | **0/6** | **100%** | **57s** |
-| Dalfox | 9/9 | 9/9 | 3/6 | 75% | 193s |
-| XSStrike | 9/9 | 0/9 | 0/6 | 100% | 77s |
+| **IntelliXSS** | **10/10** | **10/10** | **0/8** | **100%** | **67s** |
+| Dalfox | 10/10 | 10/10 | 5/8 | 67% | 211s |
+| XSStrike | 10/10 | 0/10 | 0/8 | 100% | 100s |
 
 All three find every vulnerable endpoint. They separate on the two axes that
-matter after that — precision and proof — and IntelliXSS is the only one that
-wins both:
+matter after that — **precision** and **proof** — and IntelliXSS is the only one
+that is strong on both:
 
-- **Dalfox** execution-confirms every finding, but reports three reflections
-  that cannot be exploited (a value echoed where `<` is stripped, a
-  double-quoted attribute whose quote is escaped, a neutralised JS string):
-  75% precision.
+- **Dalfox** execution-confirms every finding, but reports five reflections
+  that cannot be exploited (a stripped `<`, an escaped attribute quote, a
+  neutralised JS string, and payloads inert inside `<textarea>`/`<title>` raw
+  text): 67% precision.
 - **XSStrike** is precise (it reports none of those), but confirms nothing — it
-  has no browser, so every finding is reflection only, scored by its own
-  `Efficiency` metric. `0/9` proven.
-- **IntelliXSS** reports none of the dead reflections *and* replays all nine in
-  a headless browser with the payload's own marker: 100% precision and 9/9
-  proven, in roughly a third of Dalfox's wall-clock time.
+  has no browser, so every finding is reflection only. `0/10` proven.
+- **IntelliXSS** reports none of the dead reflections *and* replays all ten in a
+  headless browser with the payload's own marker: 100% precision **and** 10/10
+  proven, in under a third of Dalfox's wall-clock time.
 
-That is the whole thesis, measured: a finding is only as strong as its
-evidence, and IntelliXSS is the only one of the three that is both precise and
-proven. Reproduce with `python bench/compare.py --with-xsstrike ./XSStrike`;
-full per-endpoint results in `benchmark/comparison.md`.
+That is the thesis, measured: a finding is only as strong as its evidence.
+IntelliXSS is Pareto-optimal here — never worse than either tool on any axis,
+and strictly better than each on at least one (precision over Dalfox, proof
+over XSStrike), while being the fastest of the three. Reproduce with
+`python bench/compare.py --with-xsstrike ./XSStrike`; full per-endpoint results
+in `benchmark/comparison.md`.
 
 ## Architecture
 

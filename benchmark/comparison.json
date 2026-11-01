@@ -7,6 +7,9 @@
     "reflect_js": "js_string",
     "reflect_filtered": "html_text_filtered",
     "dom_query": "dom_query",
+    "hard_js_template": "js_template",
+    "trap_textarea": "rawtext_textarea",
+    "trap_title": "rawtext_title",
     "hard_tag_block": "html_text_tagblock",
     "hard_attr_events": "attr_double_eventblock",
     "safe_escaped": "html_text_escaped",
@@ -24,10 +27,13 @@
     "reflect_js",
     "reflect_filtered",
     "dom_query",
+    "hard_js_template",
     "hard_tag_block",
     "hard_attr_events"
   ],
   "clean": [
+    "trap_textarea",
+    "trap_title",
     "safe_escaped",
     "safe_attr_escaped",
     "safe_noreflect",
@@ -37,11 +43,11 @@
   ],
   "tools": {
     "intellixss": {
-      "true_positives": 9,
-      "vuln_total": 9,
+      "true_positives": 10,
+      "vuln_total": 10,
       "false_positives": 0,
-      "clean_total": 6,
-      "confirmed": 9,
+      "clean_total": 8,
+      "confirmed": 10,
       "recall": 1.0,
       "precision": 1.0,
       "per_endpoint": {
@@ -73,6 +79,18 @@
           true,
           true
         ],
+        "hard_js_template": [
+          true,
+          true
+        ],
+        "trap_textarea": [
+          false,
+          false
+        ],
+        "trap_title": [
+          false,
+          false
+        ],
         "hard_tag_block": [
           true,
           true
@@ -106,16 +124,16 @@
           false
         ]
       },
-      "seconds": 57.2
+      "seconds": 67.2
     },
     "dalfox": {
-      "true_positives": 9,
-      "vuln_total": 9,
-      "false_positives": 3,
-      "clean_total": 6,
-      "confirmed": 9,
+      "true_positives": 10,
+      "vuln_total": 10,
+      "false_positives": 5,
+      "clean_total": 8,
+      "confirmed": 10,
       "recall": 1.0,
-      "precision": 0.75,
+      "precision": 0.667,
       "per_endpoint": {
         "reflect_html": [
           true,
@@ -145,6 +163,18 @@
           true,
           true
         ],
+        "hard_js_template": [
+          true,
+          true
+        ],
+        "trap_textarea": [
+          true,
+          false
+        ],
+        "trap_title": [
+          true,
+          false
+        ],
         "hard_tag_block": [
           true,
           true
@@ -178,13 +208,13 @@
           false
         ]
       },
-      "seconds": 192.9
+      "seconds": 211.0
     },
     "xsstrike": {
-      "true_positives": 9,
-      "vuln_total": 9,
+      "true_positives": 10,
+      "vuln_total": 10,
       "false_positives": 0,
-      "clean_total": 6,
+      "clean_total": 8,
       "confirmed": 0,
       "recall": 1.0,
       "precision": 1.0,
@@ -217,6 +247,18 @@
           true,
           false
         ],
+        "hard_js_template": [
+          true,
+          false
+        ],
+        "trap_textarea": [
+          false,
+          false
+        ],
+        "trap_title": [
+          false,
+          false
+        ],
         "hard_tag_block": [
           true,
           false
@@ -250,7 +292,7 @@
           false
         ]
       },
-      "seconds": 77.2
+      "seconds": 100.4
     }
   }
 }
