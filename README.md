@@ -262,7 +262,7 @@ Full method, per-surface results and the reason for each miss:
 ### Versus Dalfox and XSStrike
 
 A labelled range (`bench/range.py`) points every scanner at the identical
-endpoints — ten exploitable across distinct contexts, eight clean controls that
+endpoints — ten exploitable across distinct contexts, ten clean controls that
 reflect safely or not at all — and scores each the same way. XSStrike is scored
 by its own `Efficiency` metric (a payload at 100 = working), not its recon
 lines, so the comparison is fair to it. Measured run
@@ -270,30 +270,35 @@ lines, so the comparison is fair to it. Measured run
 
 | Scanner | Recall | Confirmed by execution | False positives | Precision | Time |
 |---------|--------|------------------------|-----------------|-----------|------|
-| **IntelliXSS** | **10/10** | **10/10** | **0/8** | **100%** | **67s** |
-| Dalfox | 10/10 | 10/10 | 5/8 | 67% | 211s |
-| XSStrike | 10/10 | 0/10 | 0/8 | 100% | 100s |
+| **IntelliXSS** | **10/10** | **10/10** | **0/10** | **100%** | **75s** |
+| Dalfox | 10/10 | 10/10 | 7/10 | 59% | 246s |
+| XSStrike | 10/10 | 0/10 | 0/10 | 100% | 117s |
 
-All three find every vulnerable endpoint. They separate on the two axes that
-matter after that — **precision** and **proof** — and IntelliXSS is the only one
-that is strong on both:
+All three find every vulnerable endpoint, and on these contexts XSStrike is as
+precise as IntelliXSS — so the separation is on **proof** and on **Dalfox's
+over-reporting**:
 
-- **Dalfox** execution-confirms every finding, but reports five reflections
+- **Dalfox** confirms its findings in a browser but reports seven reflections
   that cannot be exploited (a stripped `<`, an escaped attribute quote, a
-  neutralised JS string, and payloads inert inside `<textarea>`/`<title>` raw
-  text): 67% precision.
-- **XSStrike** is precise (it reports none of those), but confirms nothing — it
-  has no browser, so every finding is reflection only. `0/10` proven.
-- **IntelliXSS** reports none of the dead reflections *and* replays all ten in a
-  headless browser with the payload's own marker: 100% precision **and** 10/10
-  proven, in under a third of Dalfox's wall-clock time.
+  neutralised JS string, and payloads inert inside `<textarea>`, `<title>`,
+  `<noscript>` and `<template>`): 59% precision. One of those — the
+  `<template>` case — it even reports as *verified*, though a real browser
+  never runs it: a confirmation that is itself wrong.
+- **XSStrike** is precise but confirms nothing — it has no browser, so every
+  finding is reflection only. `0/10` proven.
+- **IntelliXSS** reports none of the dead reflections (its headless browser
+  agrees that inert-container and escaped reflections do not run) *and* replays
+  all ten real ones with the payload's own marker: 100% precision **and** 10/10
+  proven, in under a third of Dalfox's time.
 
 That is the thesis, measured: a finding is only as strong as its evidence.
 IntelliXSS is Pareto-optimal here — never worse than either tool on any axis,
-and strictly better than each on at least one (precision over Dalfox, proof
-over XSStrike), while being the fastest of the three. Reproduce with
-`python bench/compare.py --with-xsstrike ./XSStrike`; full per-endpoint results
-in `benchmark/comparison.md`.
+strictly better than Dalfox on precision and than XSStrike on proof, and the
+fastest of the three. (On reflected contexts XSStrike matches IntelliXSS on
+recall and precision; IntelliXSS's decisive edges over it are execution proof
+and the coverage below.) Reproduce with
+`python bench/compare.py --with-xsstrike ./XSStrike`; per-endpoint results in
+`benchmark/comparison.md`.
 
 **Discovery (root-only).** The table gives every scanner the exact vulnerable
 URL. The other half of being the best is what each finds given only a site

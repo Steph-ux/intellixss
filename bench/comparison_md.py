@@ -25,9 +25,11 @@ def main() -> int:
     out.append("# Head-to-head: IntelliXSS vs Dalfox vs XSStrike\n")
     out.append(
         "All scanners were pointed at the identical local range "
-        "(`bench/range.py`): seven vulnerable endpoints across distinct "
-        "contexts and three clean controls that reflect safely or not at all. "
-        "Reproduce with `python bench/compare.py` (see below).\n"
+        f"(`bench/range.py`): {len(vuln)} vulnerable endpoints across distinct "
+        f"contexts and {len(clean)} clean controls that reflect safely or not "
+        "at all. XSStrike is scored by its own `Efficiency` metric (a payload "
+        "at 100 = working), not its recon lines, so the comparison is fair to "
+        "it. Reproduce with `python bench/compare.py --with-xsstrike …` (below).\n"
     )
 
     # Summary table.
@@ -73,6 +75,29 @@ def main() -> int:
             row.append(cell)
         out.append("| " + " | ".join(row) + " |")
     out.append("")
+
+    # Discovery (root-only) — a separate fixture, stated as a fixed result
+    # because it is a capability comparison, not a per-endpoint score.
+    out.append("## Discovery (root-only)\n")
+    out.append(
+        "The table above gives every scanner the exact vulnerable URL. The "
+        "other half of being the best is what each finds given only a site "
+        "**root**. `bench/crawl_range.py` is a site whose reflected XSS is a GET "
+        "search box one link-hop from the index (`/search?q=`). Pointed at the "
+        "root:\n"
+    )
+    out.append("| Scanner | Given only `/` | Deep XSS |")
+    out.append("|---|---|---|")
+    out.append("| **IntelliXSS** | `-u http://host/ --crawl` | **found + browser-confirmed** |")
+    out.append("| Dalfox | `url http://host/` | missed (no link crawl) |")
+    out.append("| XSStrike | `-u http://host/ --crawl` | missed (form-only crawler) |")
+    out.append(
+        "\nIntelliXSS's crawl follows same-origin links and scans each page's "
+        "parameters, so a search box off the index is reached and confirmed; a "
+        "single-URL scan and a form-only crawler never see it. Reproduce: "
+        "`python bench/crawl_range.py &` then each command against "
+        "`http://127.0.0.1:8890/`.\n"
+    )
 
     # Reproduce.
     out.append("## Reproduce\n")

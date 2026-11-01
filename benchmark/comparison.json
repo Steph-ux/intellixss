@@ -10,6 +10,8 @@
     "hard_js_template": "js_template",
     "trap_textarea": "rawtext_textarea",
     "trap_title": "rawtext_title",
+    "trap_noscript": "noscript",
+    "trap_template": "template",
     "hard_tag_block": "html_text_tagblock",
     "hard_attr_events": "attr_double_eventblock",
     "safe_escaped": "html_text_escaped",
@@ -34,6 +36,8 @@
   "clean": [
     "trap_textarea",
     "trap_title",
+    "trap_noscript",
+    "trap_template",
     "safe_escaped",
     "safe_attr_escaped",
     "safe_noreflect",
@@ -46,7 +50,7 @@
       "true_positives": 10,
       "vuln_total": 10,
       "false_positives": 0,
-      "clean_total": 8,
+      "clean_total": 10,
       "confirmed": 10,
       "recall": 1.0,
       "precision": 1.0,
@@ -91,6 +95,14 @@
           false,
           false
         ],
+        "trap_noscript": [
+          false,
+          false
+        ],
+        "trap_template": [
+          false,
+          false
+        ],
         "hard_tag_block": [
           true,
           true
@@ -124,16 +136,16 @@
           false
         ]
       },
-      "seconds": 67.2
+      "seconds": 75.2
     },
     "dalfox": {
       "true_positives": 10,
       "vuln_total": 10,
-      "false_positives": 5,
-      "clean_total": 8,
+      "false_positives": 7,
+      "clean_total": 10,
       "confirmed": 10,
       "recall": 1.0,
-      "precision": 0.667,
+      "precision": 0.588,
       "per_endpoint": {
         "reflect_html": [
           true,
@@ -175,6 +187,14 @@
           true,
           false
         ],
+        "trap_noscript": [
+          true,
+          false
+        ],
+        "trap_template": [
+          true,
+          true
+        ],
         "hard_tag_block": [
           true,
           true
@@ -208,13 +228,13 @@
           false
         ]
       },
-      "seconds": 211.0
+      "seconds": 246.2
     },
     "xsstrike": {
       "true_positives": 10,
       "vuln_total": 10,
       "false_positives": 0,
-      "clean_total": 8,
+      "clean_total": 10,
       "confirmed": 0,
       "recall": 1.0,
       "precision": 1.0,
@@ -259,6 +279,14 @@
           false,
           false
         ],
+        "trap_noscript": [
+          false,
+          false
+        ],
+        "trap_template": [
+          false,
+          false
+        ],
         "hard_tag_block": [
           true,
           false
@@ -292,7 +320,7 @@
           false
         ]
       },
-      "seconds": 100.4
+      "seconds": 117.4
     }
   }
 }

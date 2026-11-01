@@ -126,6 +126,17 @@ def render(name: str, q: str) -> str:
         import re
 
         inner = tmpl.format(q=re.sub(r"</\s*title", "", q, flags=re.I))
+    elif name == "trap_noscript":
+        # Strip the closing tag so no break-out is possible: the value is then
+        # inert inside <noscript> (with JS on) — a genuine clean control, not a
+        # reflection that could escape the element.
+        import re
+
+        inner = tmpl.format(q=re.sub(r"</\s*noscript", "", q, flags=re.I))
+    elif name == "trap_template":
+        import re
+
+        inner = tmpl.format(q=re.sub(r"</\s*template", "", q, flags=re.I))
     else:
         inner = tmpl.format(q=q)
     return PAGE.format(inner=inner)

@@ -1,14 +1,14 @@
 # Head-to-head: IntelliXSS vs Dalfox vs XSStrike
 
-All scanners were pointed at the identical local range (`bench/range.py`): seven vulnerable endpoints across distinct contexts and three clean controls that reflect safely or not at all. Reproduce with `python bench/compare.py` (see below).
+All scanners were pointed at the identical local range (`bench/range.py`): 10 vulnerable endpoints across distinct contexts and 10 clean controls that reflect safely or not at all. XSStrike is scored by its own `Efficiency` metric (a payload at 100 = working), not its recon lines, so the comparison is fair to it. Reproduce with `python bench/compare.py --with-xsstrike …` (below).
 
 ## Scorecard
 
 | Scanner | Recall (found/total) | Confirmed by execution | False positives | Precision | Time |
 |---|---|---|---|---|---|
-| IntelliXSS | 10/10 (100%) | 10/10 | 0/8 | 100% | 67.2s |
-| Dalfox | 10/10 (100%) | 10/10 | 5/8 | 67% | 211.0s |
-| XSStrike | 10/10 (100%) | 0/10 | 0/8 | 100% | 100.4s |
+| IntelliXSS | 10/10 (100%) | 10/10 | 0/10 | 100% | 75.2s |
+| Dalfox | 10/10 (100%) | 10/10 | 7/10 | 59% | 246.2s |
+| XSStrike | 10/10 (100%) | 0/10 | 0/10 | 100% | 117.4s |
 
 *Confirmed by execution* means the payload was proven to run (IntelliXSS: the unique marker came back in a headless browser; Dalfox: a `V`/verified PoC). A plain *found* is reflection only.
 
@@ -26,6 +26,8 @@ All scanners were pointed at the identical local range (`bench/range.py`): seven
 | hard_js_template | `js_template` | yes | CONFIRMED | CONFIRMED | found |
 | trap_textarea | `rawtext_textarea` | no (control) | ok | **false +** | ok |
 | trap_title | `rawtext_title` | no (control) | ok | **false +** | ok |
+| trap_noscript | `noscript` | no (control) | ok | **false +** | ok |
+| trap_template | `template` | no (control) | ok | CONFIRMED | ok |
 | hard_tag_block | `html_text_tagblock` | yes | CONFIRMED | CONFIRMED | found |
 | hard_attr_events | `attr_double_eventblock` | yes | CONFIRMED | CONFIRMED | found |
 | safe_escaped | `html_text_escaped` | no (control) | ok | ok | ok |
@@ -37,23 +39,15 @@ All scanners were pointed at the identical local range (`bench/range.py`): seven
 
 ## Discovery (root-only)
 
-The table above gives every scanner the exact vulnerable URL. The other half of
-"best scanner" is what each finds when given **only a site root** and left to
-discover the rest. `bench/crawl_range.py` is a small site whose reflected XSS
-lives on `/search?q=` — a GET search box reachable only by following a link
-from the index. Pointed at the root:
+The table above gives every scanner the exact vulnerable URL. The other half of being the best is what each finds given only a site **root**. `bench/crawl_range.py` is a site whose reflected XSS is a GET search box one link-hop from the index (`/search?q=`). Pointed at the root:
 
-| Scanner | Invocation | Deep XSS found |
-|---------|-----------|----------------|
-| **IntelliXSS** | `-u http://host/ --crawl` | **yes, browser-confirmed** |
-| Dalfox | `url http://host/` | no (scans the one URL; no link crawl) |
-| XSStrike | `-u http://host/ --crawl` | no (its crawler looks for forms; the link-reachable GET param is not seen) |
+| Scanner | Given only `/` | Deep XSS |
+|---|---|---|
+| **IntelliXSS** | `-u http://host/ --crawl` | **found + browser-confirmed** |
+| Dalfox | `url http://host/` | missed (no link crawl) |
+| XSStrike | `-u http://host/ --crawl` | missed (form-only crawler) |
 
-IntelliXSS's crawl follows same-origin links and extracts each page's query
-parameters and forms, so a search box one hop from the root is found and
-confirmed. A single-URL scan never reaches it, and a form-only crawler does not
-surface it. Reproduce: `python bench/crawl_range.py &` then the three commands
-above against `http://127.0.0.1:8890/`.
+IntelliXSS's crawl follows same-origin links and scans each page's parameters, so a search box off the index is reached and confirmed; a single-URL scan and a form-only crawler never see it. Reproduce: `python bench/crawl_range.py &` then each command against `http://127.0.0.1:8890/`.
 
 ## Reproduce
 
