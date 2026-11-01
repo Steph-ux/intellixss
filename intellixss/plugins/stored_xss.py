@@ -1397,6 +1397,7 @@ async def scan_stored_auto(
     *,
     browser=None,
     targets: Optional[list] = None,
+    render_pages: Optional[list] = None,
     log=None,
     page_stages: bool = True,
 ) -> List[XSSFinding]:
@@ -1473,7 +1474,12 @@ async def scan_stored_auto(
                     field=field,
                     method=method,
                     base_data=data,
-                    render_urls=[url, seed_url],
+                    # The record may render on a page other than the one that
+                    # takes the write (a comment posted to /comment appears on
+                    # /posts). The write endpoint and the seed come first, then
+                    # the same-origin pages this site links to, so the marker is
+                    # looked for wherever the application actually shows it.
+                    render_urls=[url, seed_url] + list(render_pages or []),
                     browser=browser,
                     log=log,
                     json_body=getattr(t, "source", "") == "js_write",

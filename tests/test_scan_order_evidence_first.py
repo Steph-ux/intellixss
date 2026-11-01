@@ -31,7 +31,7 @@ def _run_scan_order() -> list:
     async def fake_source_dom(self, client, target, result, lock):
         order.append("page")
 
-    async def fake_stored(self, client, target_url, targets, result, lock):
+    async def fake_stored(self, client, target_url, targets, result, lock, render_pages=None):
         order.append("stored")
 
     class _Client:

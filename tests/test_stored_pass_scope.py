@@ -35,7 +35,7 @@ def test_put_target_is_scanned_after_a_post_form_already_stored():
     """A finding that already exists narrows the pass to writes that are not forms."""
     calls = []
 
-    async def fake_auto(client, seed, *, browser=None, targets=None, log=None, page_stages=True):
+    async def fake_auto(client, seed, *, browser=None, targets=None, render_pages=None, log=None, page_stages=True):
         calls.append(
             (browser, page_stages, [(t.method, t.url) for t in targets or []])
         )
@@ -89,7 +89,7 @@ def test_put_target_is_scanned_after_a_post_form_already_stored():
 def test_full_stored_pass_runs_when_nothing_was_stored_yet():
     calls = []
 
-    async def fake_auto(client, seed, *, browser=None, targets=None, log=None, page_stages=True):
+    async def fake_auto(client, seed, *, browser=None, targets=None, render_pages=None, log=None, page_stages=True):
         calls.append((browser, page_stages, len(targets or [])))
         return []
 
@@ -119,7 +119,7 @@ def test_a_read_only_scan_never_hands_a_write_target_to_the_pass():
     """The default scan drives the page, not the API that stores the record."""
     calls = []
 
-    async def fake_auto(client, seed, *, browser=None, targets=None, log=None, page_stages=True):
+    async def fake_auto(client, seed, *, browser=None, targets=None, render_pages=None, log=None, page_stages=True):
         calls.append(
             (page_stages, [(t.method, t.url) for t in targets or []])
         )
