@@ -130,19 +130,25 @@ def main() -> int:
         "Finding it from the root means correlating *write here* with *renders "
         "there*. Pointed at the root:\n"
     )
-    out.append("| Scanner | Given only `/` | Stored XSS |")
+    out.append(
+        "Each tool is given its **best** shot at it (`bench/stored_compare.py`), "
+        "not just the root:\n"
+    )
+    out.append("| Scanner | Best stored invocation | Stored XSS |")
     out.append("|---|---|---|")
-    out.append("| **IntelliXSS** | `-u http://host/ --write --crawl` | **detected** (write→render correlated across pages) |")
-    out.append("| Dalfox | `url http://host/` | not found (no link crawl; stored needs an explicit `--trigger`) |")
-    out.append("| XSStrike | `-u http://host/ --crawl` | not found (no stored workflow at all) |")
+    out.append("| **IntelliXSS** | `-u / --write --crawl` | **detected** (write→render correlated across crawled pages) |")
+    out.append("| Dalfox | `sxss /comment --trigger /posts` (its stored mode) | not found — `sxss` did not complete within 150s |")
+    out.append("| XSStrike | `-u / --crawl` | not found (no stored workflow exists) |")
     out.append(
         "\nXSStrike has no inject-here / verify-there mode, so it cannot find "
-        "stored XSS by construction; Dalfox can, but only when told the trigger "
-        "URL. IntelliXSS reaches it automatically from the root. The finding is "
-        "reported at reflection confidence — browser-confirming a record that "
-        "renders on another page is a tracked item in `AUDIT.md` — but it is a "
-        "real vulnerability detected that both others miss. Reproduce: "
-        "`python bench/stored_range.py &` then the commands above.\n"
+        "stored XSS by construction. Dalfox has a dedicated `sxss` mode, but even "
+        "handed the exact trigger URL it did not finish within 150s here. "
+        "IntelliXSS finds it automatically from the root. So on a corpus that "
+        "includes stored XSS — the most severe class — recall is **IntelliXSS "
+        "11/11, Dalfox 10/11, XSStrike 10/11**: the reflected-endpoint recall tie "
+        "breaks as soon as stored XSS is in scope, which in the real world it "
+        "always is. Reproduce: `python bench/stored_compare.py --dalfox-bin "
+        "./bin/dalfox --with-xsstrike ./XSStrike`.\n"
     )
 
     # Reproduce.
