@@ -87,6 +87,19 @@ regex analyser's answer is what the scanner uses there today.
 **Proof.** `tests/test_js_scope_parity.py`, `tests/test_js_argument_propagation.py`,
 `tests/test_js_engine_limits.py`, `tests/test_dom_engine_switch.py`.
 
+## Fixed: false CONFIRMED under a strict CSP
+
+An event-handler payload (`<svg onload=alert('ixm…')>`) is parsed into the DOM,
+so its `on…` attribute carries the marker whether or not the handler ran. The
+confirmer had a shortcut that read execution from the attribute's *presence* —
+but that is the payload's source, not proof it executed. Under
+`script-src 'none'` the handler never runs (verified in a real browser), yet
+the shortcut reported `CONFIRMED`. Removed: execution is now credited only from
+a signal the handler emits — a dialog, the console marker, or an off-origin
+request — so a CSP-blocked reflection is reported at reflection confidence, not
+confirmed (`tests/test_confirm_csp.py`). This was the worst class of error for
+an evidence-based scanner and it is gone.
+
 ## Known limits, stated rather than hidden
 
 * The regex analyser matches tainted names by text, so unrelated code that
