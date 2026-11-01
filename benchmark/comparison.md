@@ -70,10 +70,10 @@ Each tool is given its **best** shot at it (`bench/stored_compare.py`), not just
 | Scanner | Best stored invocation | Stored XSS |
 |---|---|---|
 | **IntelliXSS** | `-u / --write --crawl` | **detected** (write→render correlated across crawled pages) |
-| Dalfox | `sxss /comment --trigger /posts` (its stored mode) | not found — `sxss` did not complete within 150s |
-| XSStrike | `-u / --crawl` | not found (no stored workflow exists) |
+| XSStrike | `-u / --crawl` | **not found** — no stored workflow exists (a completed miss) |
+| Dalfox | `sxss /comment --trigger /posts` | **did not complete** — `sxss` still grinding (672 queries, 1 worker) at 320s, killed with no result |
 
-XSStrike has no inject-here / verify-there mode, so it cannot find stored XSS by construction. Dalfox has a dedicated `sxss` mode, but even handed the exact trigger URL it did not finish within 150s here. IntelliXSS finds it automatically from the root. So on a corpus that includes stored XSS — the most severe class — recall is **IntelliXSS 11/11, Dalfox 10/11, XSStrike 10/11**: the reflected-endpoint recall tie breaks as soon as stored XSS is in scope, which in the real world it always is. Reproduce: `python bench/stored_compare.py --dalfox-bin ./bin/dalfox --with-xsstrike ./XSStrike`.
+XSStrike has no inject-here / verify-there mode, so it misses stored XSS by construction — a completed miss. Against XSStrike, then, stored XSS is a clean recall win: on a corpus that includes it, recall is **IntelliXSS 11/11 vs XSStrike 10/11**, and the reflected-endpoint recall tie breaks the moment stored XSS is in scope (which in the real world it always is). Dalfox *has* a stored mode, but even handed the exact trigger it did not finish in 320s here, so its stored result is undetermined — not scored as a miss, but a real usability failure on a one-form board. IntelliXSS finds it automatically in minutes. Reproduce: `python bench/stored_compare.py --dalfox-bin ./bin/dalfox --with-xsstrike ./XSStrike`.
 
 ## Reproduce
 
