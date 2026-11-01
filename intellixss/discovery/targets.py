@@ -1156,19 +1156,30 @@ async def _guess_reflected_params(
     add,
     seed_url: str,
     pages: Optional[Dict[str, str]] = None,
+    config: Optional[Config] = None,
 ) -> List[str]:
-    """Names from ``_GUESS_PARAMS`` that *page_url* echoes back.
+    """Parameter names *page_url* echoes back, mined from the page and a dict.
 
-    A name is only kept when sending it changes the response and the canary
-    comes back in it. Asking for a name a handler ignores returns the untouched
-    page, so this both avoids scanning dead parameters and keeps the budget at
-    one request per candidate name.
+    Candidates come from :func:`candidate_params`: names read out of the page's
+    own markup and inline JS first (links' query strings, form field names, JS
+    ``params.get('x')`` reads), then a compact dictionary of reflection-prone
+    names the page never reveals. Each candidate is proven the same way: a
+    unique canary is sent under that name and the name is kept only when the
+    canary comes back *and* the response changed. A name the handler ignores
+    returns the untouched page, so a dead or wrong-guessed name costs one
+    request and is never reported.
+
+    Budget. One request per candidate. The pass stops after ``max_requests``
+    requests or ``max_hits`` confirmed names, whichever comes first, so a page
+    that answers everything cannot drain the scan. ``--aggressive`` lifts both
+    bounds to find every injectable parameter rather than the first few.
 
     *pages* maps a crawled URL to the body already fetched for it. Reusing it
-    keeps the pass at one request per candidate without a second baseline, and
-    a page that was never crawled is fetched once here.
+    avoids a second baseline fetch and gives the miner the page's markup.
     """
     from urllib.parse import urlencode, urlsplit, urlunsplit
+
+    from intellixss.discovery.param_mine import COMMON_PARAMS, candidate_params
 
     base = urlsplit(page_url.split("#")[0])
     if base.query:
@@ -1184,13 +1195,25 @@ async def _guess_reflected_params(
             _, reference, _, _ = await client.request("GET", page_url)
         except Exception:
             return []
+
+    aggressive = bool(config and config.aggressive)
+    candidates = candidate_params(
+        reference or "",
+        mine_limit=80 if aggressive else 40,
+        wordlist_limit=len(COMMON_PARAMS) if aggressive else 30,
+    )
+    max_hits = len(candidates) if aggressive else 3
+    max_requests = len(candidates) if aggressive else 25
+
     hits: List[str] = []
-    for name in _GUESS_PARAMS:
-        if len(hits) >= 2:
+    sent = 0
+    for name in candidates:
+        if len(hits) >= max_hits or sent >= max_requests:
             break
         url = urlunsplit(
             (base.scheme, base.netloc, base.path, urlencode({name: _GUESS_CANARY}), "")
         )
+        sent += 1
         try:
             st, body, _, _ = await client.request("GET", url)
         except Exception:
@@ -1399,7 +1422,12 @@ async def discover_targets(
         # is bounded and only reports a name that the page actually echoes.
         if config.guess_params:
             names = await _guess_reflected_params(
-                client, page_url, add, seed_url, {page_url: body, seed_url: body}
+                client,
+                page_url,
+                add,
+                seed_url,
+                {page_url: body, seed_url: body},
+                config,
             )
             for name in names:
                 add(

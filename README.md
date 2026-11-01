@@ -79,7 +79,7 @@ report       console, JSON, HTML - all scored from the same CVSS table
 | `--write` | Allow `POST`/`PUT`/`PATCH`/`DELETE` payloads. Off by default |
 | `--deep` | Also run header, redirect, JSON, GraphQL and upload plugins |
 | `-a` / `--aggressive` | Keep going after a hit: all payloads, all parameters |
-| `--guess-params` | Also try conventional parameter names the page never links to |
+| `--guess-params` | Mine parameter names from the page's own markup and JS, plus a dictionary, and try the ones it never links to (proven with a canary) |
 | `-v` / `--verbose` | Character survival and per-technique decisions |
 | `-s` / `--silent` | Findings only |
 | `--version` | Print the version |
