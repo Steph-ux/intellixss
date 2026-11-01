@@ -39,15 +39,15 @@ All scanners were pointed at the identical local range (`bench/range.py`): 10 vu
 
 ## Discovery (root-only)
 
-The table above gives every scanner the exact vulnerable URL. The other half of being the best is what each finds given only a site **root**. `bench/crawl_range.py` is a site whose reflected XSS is a GET search box one link-hop from the index (`/search?q=`). Pointed at the root:
+The table above gives every scanner the exact vulnerable URL. The other half of being the best is what each finds given only a site **root**. `bench/crawl_range.py` hides three reflected XSS off the index: a link-revealed GET param (`/search?q=`), a one-hop filter param (`/products?category=`), and a form two hops deep (`/feedback`). Pointed at the root:
 
-| Scanner | Given only `/` | Deep XSS |
+| Scanner | Given only `/` | Deep XSS found |
 |---|---|---|
-| **IntelliXSS** | `-u http://host/ --crawl` | **found + browser-confirmed** |
-| Dalfox | `url http://host/` | missed (no link crawl) |
-| XSStrike | `-u http://host/ --crawl` | missed (form-only crawler) |
+| **IntelliXSS** | `-u http://host/ --crawl` | **3/3, browser-confirmed** |
+| Dalfox | `url http://host/` | 0/3 (no link crawl) |
+| XSStrike | `-u http://host/ --crawl` | 0/3 (form-only crawler) |
 
-IntelliXSS's crawl follows same-origin links and scans each page's parameters, so a search box off the index is reached and confirmed; a single-URL scan and a form-only crawler never see it. Reproduce: `python bench/crawl_range.py &` then each command against `http://127.0.0.1:8890/`.
+IntelliXSS's crawl follows same-origin links and scans each page's parameters and forms, so all three are reached and confirmed; a single-URL scan never leaves the root, and a form-only crawler misses the link-reachable GET params. Reproduce: `python bench/crawl_range.py &` then each command against `http://127.0.0.1:8890/`.
 
 ## Reproduce
 

@@ -31,16 +31,32 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         u = urlsplit(self.path)
+        q = parse_qs(u.query)
         if u.path == "/":
             self._send(_page(
-                "<h1>Home</h1><a href='/about'>About</a> "
-                "<a href='/search'>Search</a>"
+                "<h1>Home</h1>"
+                "<a href='/about'>About</a> "
+                "<a href='/search'>Search</a> "
+                "<a href='/products?category=electronics'>Products</a>"
             ))
         elif u.path == "/about":
-            self._send(_page("<p>About us.</p> <a href='/search?q=hello'>search hello</a>"))
+            # The feedback form is two hops from the root (/ -> /about -> form).
+            self._send(_page(
+                "<p>About us.</p> <a href='/search?q=hello'>search hello</a> "
+                "<a href='/feedback'>Leave feedback</a>"
+            ))
         elif u.path == "/search":
-            q = parse_qs(u.query).get("q", [""])[0]
-            self._send(_page(f"<h1>Results</h1><div>{q}</div>"))  # reflected XSS
+            self._send(_page(f"<h1>Results</h1><div>{q.get('q', [''])[0]}</div>"))  # XSS
+        elif u.path == "/products":
+            # A link-only GET filter param, one hop from the root.
+            self._send(_page(f"<h1>Products</h1><div>{q.get('category', [''])[0]}</div>"))  # XSS
+        elif u.path == "/feedback":
+            if "comment" in q:
+                self._send(_page(f"<div>{q.get('comment', [''])[0]}</div>"))  # XSS
+            else:
+                self._send(_page(
+                    "<form action='/feedback' method='get'><input name='comment'></form>"
+                ))
         else:
             self._send(b"not found", status=404)
 

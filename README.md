@@ -302,13 +302,14 @@ and the coverage below.) Reproduce with
 
 **Discovery (root-only).** The table gives every scanner the exact vulnerable
 URL. The other half of being the best is what each finds given only a site
-**root**. `bench/crawl_range.py` is a site whose reflected XSS is a GET search
-box one link-hop from the index (`/search?q=`). Pointed at the root, only
-IntelliXSS finds and browser-confirms it: `--crawl` follows same-origin links
-and scans each page's own parameters and forms. Dalfox scans the single URL and
-does not crawl; XSStrike's crawler looks for forms and never surfaces the
-link-reachable GET parameter. So on realistic root-only usage IntelliXSS
-reaches an injection point **both** competitors miss.
+**root**. `bench/crawl_range.py` hides three reflected XSS off the index: a
+link-revealed GET param (`/search?q=`), a one-hop filter param
+(`/products?category=`), and a form two hops deep (`/feedback`). Pointed at the
+root, **IntelliXSS `--crawl` finds and browser-confirms all three (3/3); Dalfox
+and XSStrike find 0/3.** IntelliXSS follows same-origin links and scans each
+page's parameters and forms; a single-URL scan never leaves the root, and a
+form-only crawler misses link-reachable GET params. On realistic root-only
+usage IntelliXSS reaches injection points **both** competitors miss.
 
 ## Architecture
 
