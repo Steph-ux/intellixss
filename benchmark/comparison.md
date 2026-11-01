@@ -49,6 +49,18 @@ The table above gives every scanner the exact vulnerable URL. The other half of 
 
 IntelliXSS's crawl follows same-origin links and scans each page's parameters and forms, so all three are reached and confirmed; a single-URL scan never leaves the root, and a form-only crawler misses the link-reachable GET params. Reproduce: `python bench/crawl_range.py &` then each command against `http://127.0.0.1:8890/`.
 
+## Stored XSS (root-only)
+
+Stored XSS is the class that most separates the tools. `bench/stored_range.py` is the real shape of it: a comment posted to `/comment` redirects to `/thanks` (the payload is never echoed back) and renders on a different page, `/posts`, linked from the index. Finding it from the root means correlating *write here* with *renders there*. Pointed at the root:
+
+| Scanner | Given only `/` | Stored XSS |
+|---|---|---|
+| **IntelliXSS** | `-u http://host/ --write --crawl` | **detected** (write→render correlated across pages) |
+| Dalfox | `url http://host/` | not found (no link crawl; stored needs an explicit `--trigger`) |
+| XSStrike | `-u http://host/ --crawl` | not found (no stored workflow at all) |
+
+XSStrike has no inject-here / verify-there mode, so it cannot find stored XSS by construction; Dalfox can, but only when told the trigger URL. IntelliXSS reaches it automatically from the root. The finding is reported at reflection confidence — browser-confirming a record that renders on another page is a tracked item in `AUDIT.md` — but it is a real vulnerability detected that both others miss. Reproduce: `python bench/stored_range.py &` then the commands above.
+
 ## Reproduce
 
 ```bash

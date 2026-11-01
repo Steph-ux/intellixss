@@ -100,6 +100,30 @@ def main() -> int:
         "&` then each command against `http://127.0.0.1:8890/`.\n"
     )
 
+    out.append("## Stored XSS (root-only)\n")
+    out.append(
+        "Stored XSS is the class that most separates the tools. "
+        "`bench/stored_range.py` is the real shape of it: a comment posted to "
+        "`/comment` redirects to `/thanks` (the payload is never echoed back) "
+        "and renders on a different page, `/posts`, linked from the index. "
+        "Finding it from the root means correlating *write here* with *renders "
+        "there*. Pointed at the root:\n"
+    )
+    out.append("| Scanner | Given only `/` | Stored XSS |")
+    out.append("|---|---|---|")
+    out.append("| **IntelliXSS** | `-u http://host/ --write --crawl` | **detected** (write→render correlated across pages) |")
+    out.append("| Dalfox | `url http://host/` | not found (no link crawl; stored needs an explicit `--trigger`) |")
+    out.append("| XSStrike | `-u http://host/ --crawl` | not found (no stored workflow at all) |")
+    out.append(
+        "\nXSStrike has no inject-here / verify-there mode, so it cannot find "
+        "stored XSS by construction; Dalfox can, but only when told the trigger "
+        "URL. IntelliXSS reaches it automatically from the root. The finding is "
+        "reported at reflection confidence — browser-confirming a record that "
+        "renders on another page is a tracked item in `AUDIT.md` — but it is a "
+        "real vulnerability detected that both others miss. Reproduce: "
+        "`python bench/stored_range.py &` then the commands above.\n"
+    )
+
     # Reproduce.
     out.append("## Reproduce\n")
     out.append("```bash")

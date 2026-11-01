@@ -311,6 +311,18 @@ page's parameters and forms; a single-URL scan never leaves the root, and a
 form-only crawler misses link-reachable GET params. On realistic root-only
 usage IntelliXSS reaches injection points **both** competitors miss.
 
+**Stored XSS (root-only).** The class that most separates the tools.
+`bench/stored_range.py` is the real shape of stored XSS: a comment posted to
+`/comment` redirects to `/thanks` (payload never echoed) and renders on a
+different page, `/posts`, linked from the index. Pointed at the root,
+**IntelliXSS detects it** — it crawls to `/posts` and correlates the write with
+the render — while **Dalfox and XSStrike find nothing**: XSStrike has no
+inject-here / verify-there mode at all, and Dalfox finds stored XSS only when
+told the trigger URL. The finding is reported at reflection confidence
+(browser-confirming a record that renders on another page is tracked in
+`AUDIT.md`), but it is a real vulnerability both competitors miss by
+construction.
+
 ## Architecture
 
 ```
