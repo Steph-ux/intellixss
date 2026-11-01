@@ -71,6 +71,11 @@ from intellixss.models import (
     XSSFinding,
     mark_of,
 )
+from intellixss.payloads.blind import (
+    beacon_url,
+    build_blind_payloads,
+    normalize_oob,
+)
 from intellixss.payloads.generator import generate_payloads, make_marker
 from intellixss.payloads.waf_profiles import get_waf_payloads
 from intellixss.plugins.graphql_xss import scan_graphql_xss
@@ -367,6 +372,15 @@ class Scanner:
                 # take what is left, inside the reserve.
                 await self._stored_pass(client, target_url, targets, result, lock)
 
+                # Blind / out-of-band delivery. Opt-in (``--blind``). Beacons
+                # are sent into every discovered point and recorded; none is a
+                # finding, because execution happens where the operator's
+                # collaborator sees it, not here.
+                if self.config.blind_url:
+                    await self._deliver_blind(
+                        client, target_url, targets, result, lock
+                    )
+
                 # Sources the URL cannot drive are invisible to the ladder, so
                 # the page is analysed directly for them. The document itself is
                 # the unit: a sink reading ``localStorage`` or ``window.name``
@@ -432,6 +446,104 @@ class Scanner:
             "title",
         )
         return result
+
+    # Headers an application commonly stores and later renders in a back-office
+    # view — the classic blind-XSS delivery surface. Injected only with
+    # ``--blind-header``; a value here reaches a human's browser, never the
+    # scanner's.
+    _BLIND_HEADERS = (
+        "User-Agent",
+        "Referer",
+        "X-Forwarded-For",
+        "X-Forwarded-Host",
+        "X-Real-IP",
+        "True-Client-IP",
+        "X-Api-Version",
+        "Origin",
+    )
+
+    async def _deliver_blind(
+        self,
+        client: HttpClient,
+        target_url: str,
+        targets: List[ScanTarget],
+        result: ScanResult,
+        lock: asyncio.Lock,
+    ) -> None:
+        """Deliver out-of-band beacon payloads and record each delivery.
+
+        One correlation marker per injection point, so an OOB hit names the
+        exact parameter (or header) that carried it. A delivery is recorded only
+        when the request actually reached the server — a refused write returns
+        the network-error shape, which is not a delivery. Nothing here is a
+        finding: the scanner cannot observe the beacon fire, so it reports what
+        it did (sent this, watch your listener), never a confirmation.
+        """
+        oob = self.config.blind_url
+        base, _ = normalize_oob(oob)
+        if not base:
+            self._log(f"blind: ignoring unusable --blind target {oob!r}", "warn")
+            return
+
+        async def _record(url: str, parameter: str, method: str, via: str) -> int:
+            marker = make_marker(secrets.token_hex(4))
+            payloads = build_blind_payloads(oob, marker)
+            if not self.config.aggressive:
+                payloads = payloads[:6]
+            delivered = False
+            last_status = 0
+            for p in payloads:
+                try:
+                    if via == "header":
+                        st, _b, _h, _f = await client.request(
+                            "GET", url, headers={parameter: p}
+                        )
+                    else:
+                        st, _b, _h, _f = await client.inject(
+                            url, parameter, p, method=method, base_data=None
+                        )
+                except Exception:
+                    continue
+                if st != 0:
+                    delivered = True
+                    last_status = st
+            if delivered:
+                async with lock:
+                    result.blind_deliveries.append(
+                        {
+                            "url": url,
+                            "parameter": parameter,
+                            "method": method,
+                            "via": via,
+                            "oob": beacon_url(oob, marker),
+                            "marker": marker,
+                            "status": last_status,
+                        }
+                    )
+            return 1 if delivered else 0
+
+        count = 0
+        seen: set = set()
+        for t in targets:
+            for param in t.params or []:
+                key = (t.url.split("#")[0], t.method.upper(), param)
+                if key in seen:
+                    continue
+                seen.add(key)
+                count += await _record(t.url, param, t.method, "param")
+
+        if self.config.blind_header:
+            for name in self._BLIND_HEADERS:
+                count += await _record(target_url, name, "GET", "header")
+
+        if count:
+            self._log(
+                f"blind: delivered beacons to {count} point(s) at {base} "
+                f"— watch your collaborator for the ixm… marker",
+                "info",
+            )
+        else:
+            self._log("blind: no injection point accepted a beacon", "warn")
 
     async def _auth_setup(
         self, target_url: str, result: ScanResult

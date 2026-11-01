@@ -78,6 +78,8 @@ report       console, JSON, HTML - all scored from the same CVSS table
 | `--max-confirm` | Browser navigations per host (default 12) |
 | `--write` | Allow `POST`/`PUT`/`PATCH`/`DELETE` payloads. Off by default |
 | `--deep` | Also run header, redirect, JSON, GraphQL and upload plugins |
+| `--blind URL` | Deliver out-of-band beacon payloads to a collaborator host (interactsh/OAST, XSS Hunter, Burp). Delivered, not confirmed — watch your listener |
+| `--blind-header` | With `--blind`, also inject beacons into request headers |
 | `-a` / `--aggressive` | Keep going after a hit: all payloads, all parameters |
 | `--guess-params` | Mine parameter names from the page's own markup and JS, plus a dictionary, and try the ones it never links to (proven with a canary) |
 | `-v` / `--verbose` | Character survival and per-technique decisions |
@@ -105,6 +107,27 @@ because the page may have raised it itself.
 
 An encoded character is not usable syntax. If the target turns `<` into
 `&lt;`, families that need a tag are dropped rather than attempted.
+
+## Blind / out-of-band XSS
+
+A blind XSS fires in a browser the scanner never drives — a support agent
+reading a ticket, an admin viewing a log. It cannot be confirmed here, so
+`--blind <URL>` does not pretend to: it delivers beacon payloads to an
+operator-controlled collaborator (interactsh / OAST, XSS Hunter, Burp
+Collaborator) and records each *delivery*, never a confirmation.
+
+```bash
+python intellixss.py -u https://app/ --write --blind https://abcd.oast.pro --blind-header
+```
+
+Every beacon carries the injection point's own unique `ixm…` marker, as both a
+path segment and a wildcard-DNS sub-domain, so when one fires out of band the
+hit on your collaborator names the exact parameter or header that carried it.
+Deliveries are listed in the console and under `blind_deliveries` in the JSON
+report, labelled `UNCONFIRMED`, and are never counted as findings — execution,
+if any, happens where only your listener can see it. Writing into stored sinks
+still requires `--write`; without it only `GET` parameters and headers carry
+beacons.
 
 ## What it detects
 

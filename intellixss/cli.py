@@ -498,6 +498,42 @@ def render_cleanup(result: ScanResult, console: "Console") -> None:
         )
 
 
+def render_blind(result: ScanResult, console: "Console") -> None:
+    """Out-of-band beacons this scan delivered — explicitly unconfirmed.
+
+    A blind payload fires where the scanner never looks, so these are not
+    findings: they are deliveries. The operator watches their collaborator for
+    the marker, and the row says which parameter carried it.
+    """
+    if not result.blind_deliveries:
+        return
+    table = Table(
+        title="Blind payloads delivered (UNCONFIRMED — watch your OOB listener)",
+        title_style="bold yellow",
+        header_style="bold cyan",
+        expand=True,
+    )
+    table.add_column("Via", width=7)
+    table.add_column("Point", ratio=3)
+    table.add_column("Marker", width=14)
+    table.add_column("Beacon", ratio=3)
+    for d in result.blind_deliveries:
+        point = f"{d.get('method', '')} {d.get('parameter', '')}".strip()
+        table.add_row(
+            Text(str(d.get("via") or ""), style="dim"),
+            f"{point}  {str(d.get('url') or '')[:60]}",
+            Text(str(d.get("marker") or ""), style="magenta"),
+            str(d.get("oob") or ""),
+        )
+    console.print(table)
+    console.print(
+        f"  {len(result.blind_deliveries)} beacon(s) delivered. These are NOT "
+        "confirmed: execution, if any, happens in another user's browser. A hit "
+        "on your collaborator for one of the markers above is the proof.",
+        style="yellow",
+    )
+
+
 def render_plain(result: ScanResult) -> None:
     """Fallback renderer: clean, greppable, no rich."""
     print(f"\n=== Scan summary: {result.target_url} ===")
@@ -521,6 +557,14 @@ def render_plain(result: ScanResult) -> None:
             print(f"    trigger: {f.trigger}")
         print(f"    evidence:{f.evidence[:200]}")
         print(f"    repro:   {reproduce_command(f)}")
+    if result.blind_deliveries:
+        print(
+            f"\n--- blind payloads delivered (UNCONFIRMED — watch your OOB "
+            f"listener): {len(result.blind_deliveries)} ---"
+        )
+        for d in result.blind_deliveries:
+            point = f"{d.get('method', '')} {d.get('parameter', '')}".strip()
+            print(f"  - [{d.get('via')}] {point}  marker={d.get('marker')}  {d.get('oob')}")
     if not result.findings:
         for d in result.diagnoses[:12]:
             print(f"  - [{d.reason.value}] status={d.status} {(d.detail or '')[:140]}")
@@ -547,6 +591,7 @@ async def _run_one(url: str, cfg: Config, quiet: bool) -> tuple[ScanResult, int]
             render_summary(result, console)
             render_findings(result, console, verbose=cfg.verbose)
             render_cleanup(result, console)
+            render_blind(result, console)
             render_diagnoses(result, console)
         else:
             render_plain(result)
