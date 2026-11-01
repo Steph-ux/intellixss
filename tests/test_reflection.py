@@ -368,3 +368,21 @@ def test_attr_breakout_with_raw_quote_is_executable():
         body = f'<input type=text value="{payload}">'  # quote reflected raw
         ok, _tag = is_payload_effective(body, payload, "html_attr_double")
         assert ok, f"raw-quote breakout missed: {payload!r}"
+
+
+def test_event_handler_remnant_without_a_tag_is_not_executable():
+    """A tag-name filter can leave `on...=` sitting in text, with no element.
+
+    `<svg/onload=alert(1)>` with `<svg` stripped reflects as
+    `<div>/onload=alert(1)>`: the handler follows the div's own `>` and is plain
+    text, so nothing executes. Reading it as effective made the scanner settle
+    on a dead payload instead of escalating to a tag that survives the filter.
+    """
+    marker = "ixmdeadbe"
+    body = f"<div>/onload=alert('{marker}')></div>"  # <svg stripped
+    ok, tag = is_payload_effective(body, f"<svg/onload=alert('{marker}')>", "html_text")
+    assert not ok, f"tagless handler remnant wrongly executable: {tag}"
+    # The surviving alternative a filter-aware scan escalates to is still live.
+    live = f"<div><img src=x onerror=alert('{marker}')></div>"
+    ok2, _ = is_payload_effective(live, f"<img src=x onerror=alert('{marker}')>", "html_text")
+    assert ok2

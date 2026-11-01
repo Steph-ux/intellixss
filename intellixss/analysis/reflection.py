@@ -473,6 +473,13 @@ def _inside_open_tag(response: str, payload: str) -> bool:
     # handler belongs inside text, not inside the earlier real tag.
     if window.rfind("&lt;") > last_lt:
         return False
+    # If that tag already closed — a ">" sits between its "<" and the handler —
+    # the handler is in text, not inside the tag. This is what a tag-name filter
+    # produces: `<svg/onload=alert(1)>` with `<svg` stripped leaves
+    # `<div>/onload=alert(1)>`, where `onload=` follows the div's own ">" and
+    # never becomes an attribute of any element.
+    if ">" in window[last_lt:]:
+        return False
     nxt = window[last_lt + 1:last_lt + 2]
     return bool(nxt) and (nxt.isalpha() or nxt in ("/", "!"))
 
