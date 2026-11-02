@@ -437,6 +437,17 @@ class Scanner:
                         f"deduped findings: {before} -> {len(result.findings)}", "info"
                     )
 
+                # A reflection that never executed in the browser, in a context
+                # that needs inline script/handler/js-url execution, served on a
+                # page whose own CSP forbids exactly that, is not exploitable as
+                # it stands. Reclassify it from a vulnerability to a CSP-blocked
+                # lead (moved to diagnoses, never silently dropped), so the
+                # scanner does not report as XSS what the policy makes inert.
+                # The CSP is read per finding from its own page, so a finding on
+                # a page without CSP is untouched; browser-confirmed findings are
+                # kept always (execution despite CSP is a real bypass).
+                await self._reclassify_csp_blocked(client, result)
+
                 # Cleanup has to run while the session is still open: it sends
                 # its own requests, and a client whose session is closed asserts
                 # on the first one, which is how the first version of this
@@ -575,6 +586,61 @@ class Scanner:
             )
         else:
             self._log("blind: no injection point accepted a beacon", "warn")
+
+    async def _reclassify_csp_blocked(self, client: HttpClient, result: ScanResult) -> None:
+        """Move reflection-level findings that a strict CSP blocks to diagnoses.
+
+        Every reflected XSS finding relies on inline execution — a tag's script,
+        an event handler, a ``javascript:`` URL. A page served with a strict CSP
+        (``script-src``/``default-src`` without ``'unsafe-inline'`` or ``*``)
+        blocks all of those, so a reflection the browser could not run there is
+        not exploitable as it stands. Such a finding is reclassified to a
+        CSP-blocked lead rather than reported as a vulnerability. A
+        browser-confirmed finding is never touched (if it ran under the CSP, the
+        policy was bypassed — a real finding), and the CSP is read from each
+        finding's own page so one on a page without CSP is left alone.
+        """
+        reflective = [
+            f for f in result.findings
+            if not f.browser_confirmed and f.verified_by == "reflection"
+        ]
+        if not reflective:
+            return
+        csp_by_page: Dict[str, object] = {}
+        blocked_ids = set()
+        for f in reflective:
+            page = f.url.split("#")[0]
+            if page not in csp_by_page:
+                try:
+                    _st, _b, hdrs, _fin = await client.request("GET", page)
+                    csp_by_page[page] = analyze_csp(hdrs)
+                except Exception:
+                    csp_by_page[page] = None
+            csp = csp_by_page[page]
+            if csp is not None and getattr(csp, "strict", False):
+                blocked_ids.add(id(f))
+                result.diagnoses.append(
+                    BlockDiagnosis(
+                        reason=BlockReason.FILTERED_PAYLOAD,
+                        detail=(
+                            f"{f.parameter}: reflected in {f.context.value}, but the "
+                            f"page's strict Content-Security-Policy blocks inline "
+                            f"execution — not exploitable as it stands"
+                        ),
+                        signals=["csp-strict"],
+                        suggestion=(
+                            "The reflection is live but the CSP blocks the payload's "
+                            "vector; review for a CSP bypass before treating it as XSS."
+                        ),
+                    )
+                )
+                self._log(
+                    f"csp: reclassified reflected {f.parameter} on {page[:60]} "
+                    f"— strict CSP blocks inline execution",
+                    "info",
+                )
+        if blocked_ids:
+            result.findings = [f for f in result.findings if id(f) not in blocked_ids]
 
     async def _auth_setup(
         self, target_url: str, result: ScanResult
