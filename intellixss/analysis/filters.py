@@ -119,7 +119,15 @@ def detect_waf(
 def analyze_csp(headers: Optional[Dict[str, str]]) -> Optional[_CspInfo]:
     """Interpret a Content-Security-Policy header far enough to know what dies."""
     hnorm = _norm_headers(headers or {})
-    raw = hnorm.get("content-security-policy") or hnorm.get("content-security-policy-report-only")
+    # An enforced policy blocks; a ``-Report-Only`` policy only reports and
+    # blocks nothing. Prefer the enforced header when both are present, and
+    # remember which one we read so a caller never treats report-only as a
+    # mitigation.
+    raw = hnorm.get("content-security-policy")
+    report_only = False
+    if not raw:
+        raw = hnorm.get("content-security-policy-report-only")
+        report_only = bool(raw)
     if not raw:
         return None
     directives: Dict[str, str] = {}
@@ -143,7 +151,14 @@ def analyze_csp(headers: Optional[Dict[str, str]]) -> Optional[_CspInfo]:
     elif "'unsafe-inline'" not in script_src and script_src:
         # nonce/hash based: inline needs the nonce, handlers are blocked
         blocked.append("event handlers (on*=)")
-    return _CspInfo(present=True, strict=strict, directives=directives, blocked_vectors=blocked)
+    return _CspInfo(
+        present=True,
+        strict=strict,
+        directives=directives,
+        blocked_vectors=blocked,
+        report_only=report_only,
+        effective_script_src=script_src,
+    )
 
 
 def classify_filters(
