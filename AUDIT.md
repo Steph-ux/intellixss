@@ -100,6 +100,20 @@ request — so a CSP-blocked reflection is reported at reflection confidence, no
 confirmed (`tests/test_confirm_csp.py`). This was the worst class of error for
 an evidence-based scanner and it is gone.
 
+**And reflection-level too.** Every reflected XSS finding relies on inline
+execution (a tag's script, an event handler, a `javascript:` URL). When the
+finding's own page is served with a strict CSP that blocks those, the
+reflection is not exploitable as it stands, so it is reclassified from a
+reported vulnerability to a CSP-blocked lead in `diagnoses` — never silently
+dropped. The CSP is read per finding from its own page, so a finding on a page
+without CSP is untouched, and a browser-confirmed finding is kept always (if it
+ran under the CSP, the policy was bypassed — a real finding). This is precision
+a character-survival scanner with no CSP awareness cannot match: against the
+same strict-CSP reflection, XSStrike reports `Efficiency: 100` (a false
+positive), IntelliXSS reports a blocked lead. See
+`intellixss/scanner/orchestrator.py::_reclassify_csp_blocked`,
+`tests/test_csp_reclassify.py`.
+
 ## Known limits, stated rather than hidden
 
 * The regex analyser matches tainted names by text, so unrelated code that

@@ -262,43 +262,45 @@ Full method, per-surface results and the reason for each miss:
 ### Versus Dalfox and XSStrike
 
 A labelled range (`bench/range.py`) points every scanner at the identical
-endpoints — ten exploitable across distinct contexts, ten clean controls that
-reflect safely or not at all — and scores each the same way. XSStrike is scored
-by its own `Efficiency` metric (a payload at 100 = working), not its recon
-lines, so the comparison is fair to it. Measured run
-(`python bench/compare.py --with-xsstrike ./XSStrike`):
+endpoints — ten exploitable across distinct contexts, eleven clean controls that
+reflect safely or not at all (one served under a strict CSP) — and scores each
+the same way. XSStrike is scored by its own `Efficiency` metric (a payload at
+100 = working), not its recon lines, so the comparison is fair to it. Measured
+run (`python bench/compare.py --with-xsstrike ./XSStrike`):
 
 | Scanner | Recall | Confirmed by execution | False positives | Precision | Time |
 |---------|--------|------------------------|-----------------|-----------|------|
-| **IntelliXSS** | **10/10** | **10/10** | **0/10** | **100%** | **75s** |
-| Dalfox | 10/10 | 10/10 | 7/10 | 59% | 246s |
-| XSStrike | 10/10 | 0/10 | 0/10 | 100% | 117s |
+| **IntelliXSS** | **10/10** | **10/10** | **0/11** | **100%** | **78s** |
+| Dalfox | 10/10 | 10/10 | 8/11 | 56% | 248s |
+| XSStrike | 10/10 | 0/10 | 1/11 | 91% | 103s |
 
-All three find every vulnerable endpoint, and on these contexts XSStrike is as
-precise as IntelliXSS — so the separation is on **proof** and on **Dalfox's
-over-reporting**:
+All three find every vulnerable endpoint. They separate on **precision** and
+**proof**, and IntelliXSS leads both:
 
-- **Dalfox** confirms its findings in a browser but reports seven reflections
+- **Dalfox** confirms its findings in a browser but reports eight reflections
   that cannot be exploited (a stripped `<`, an escaped attribute quote, a
-  neutralised JS string, and payloads inert inside `<textarea>`, `<title>`,
-  `<noscript>` and `<template>`): 59% precision. One of those — the
-  `<template>` case — it even reports as *verified*, though a real browser
+  neutralised JS string, payloads inert inside `<textarea>`/`<title>`/
+  `<noscript>`/`<template>`, and one under a strict CSP): 56% precision. One —
+  the `<template>` case — it even reports as *verified*, though a real browser
   never runs it: a confirmation that is itself wrong.
-- **XSStrike** is precise but confirms nothing — it has no browser, so every
-  finding is reflection only. `0/10` proven.
-- **IntelliXSS** reports none of the dead reflections (its headless browser
-  agrees that inert-container and escaped reflections do not run) *and* replays
-  all ten real ones with the payload's own marker: 100% precision **and** 10/10
-  proven, in under a third of Dalfox's time.
+- **XSStrike** confirms nothing (no browser, every finding reflection-only,
+  `0/10` proven) and false-positives on the strict-CSP reflection it has no way
+  to evaluate: 91% precision.
+- **IntelliXSS** reports none of the dead reflections — its headless browser and
+  per-page CSP analysis agree that inert-container, escaped, and CSP-blocked
+  reflections do not run — *and* replays all ten real ones with the payload's
+  own marker: **100% precision and 10/10 proven**, in roughly a third of
+  Dalfox's time.
 
 That is the thesis, measured: a finding is only as strong as its evidence.
-IntelliXSS is Pareto-optimal here — never worse than either tool on any axis,
-strictly better than Dalfox on precision and than XSStrike on proof, and the
-fastest of the three. (On reflected contexts XSStrike matches IntelliXSS on
-recall and precision; IntelliXSS's decisive edges over it are execution proof
-and the coverage below.) Reproduce with
-`python bench/compare.py --with-xsstrike ./XSStrike`; per-endpoint results in
-`benchmark/comparison.md`.
+IntelliXSS is strictly better than Dalfox on precision and than XSStrike on
+both precision and proof, ties only on recall (all three find every vulnerable
+endpoint), and is the fastest of the three. The precision lead over XSStrike
+comes from evidence it cannot gather: a headless browser and per-page CSP
+analysis clear reflections that do not actually run, which a character-survival
+metric with no browser flags anyway — the strict-CSP control is exactly such a
+case. Reproduce with `python bench/compare.py --with-xsstrike ./XSStrike`;
+per-endpoint results in `benchmark/comparison.md`.
 
 **Whole site, root only — the realistic test.** The table above hands each tool
 the exact vulnerable URL, and under that artificial condition XSStrike matches
@@ -335,15 +337,15 @@ ends. Given each tool its *best* stored shot (`bench/stored_compare.py`) against
 a cross-page board (post `/comment` → render `/posts`): **IntelliXSS** detects
 it (`-u / --write --crawl` — crawls to `/posts`, correlates write with render);
 **XSStrike** cannot, by construction (no inject-here/verify-there mode) — a
-completed miss; and **Dalfox**'s dedicated `sxss` mode, even handed the exact
-trigger, did not finish in 320s (still grinding 672 queries on one worker),
-so its stored result is *undetermined* — not scored as a miss, but a real
-usability failure on a one-form board. So on a corpus that includes stored XSS,
-recall against XSStrike is **IntelliXSS 11/11 vs 10/11** — a strict recall win,
-since stored XSS is a class XSStrike structurally cannot test. (Cross-page
-stored is reported at reflection confidence when the render page was already
-written to by an earlier stage; it browser-confirms otherwise, e.g. the
-whole-site run above — see `AUDIT.md`.)
+completed miss. **Dalfox** finds it in neither mode: its dedicated `sxss` does
+not complete against this one-form board, and its normal `url` mode *does*
+complete and reports nothing on the write endpoint, the index, or the render
+page — a measured miss, not a timeout. So on a corpus that includes stored XSS,
+recall is **IntelliXSS 11/11, Dalfox 10/11, XSStrike 10/11** — a strict recall
+win over **both**, since stored XSS is a class XSStrike cannot test and Dalfox
+does not find here. (Cross-page stored is reported at reflection confidence when
+the render page was already written to by an earlier stage; it browser-confirms
+otherwise, e.g. the whole-site run above — see `AUDIT.md`.)
 
 ## Architecture
 
