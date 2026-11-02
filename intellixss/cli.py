@@ -726,7 +726,61 @@ def _dedupe_preserving_order(urls: List[str]) -> List[str]:
     return out
 
 
+# Markers of a navigation future orphaned by a cancelled confirmation. The
+# confirmer bounds every ``page.goto`` with a wall-clock budget; when the scan
+# cancels a probe (the stored pass hitting its time cap, the browser closing at
+# shutdown) Playwright's in-flight navigation resolves *afterwards* with one of
+# these and no one is left to await it.
+_BENIGN_ORPHAN_FUTURE_MARKERS = (
+    "err_aborted",
+    "has been closed",
+    "navigating to",
+    "target closed",
+    "target page, context or browser has been closed",
+)
+
+
+def _is_benign_orphan_future(message: str, exc: Optional[BaseException]) -> bool:
+    """True for asyncio's "Future exception was never retrieved" nav noise.
+
+    Only that exact benign case — a leaked Playwright navigation future from a
+    cancelled probe — is matched; every other loop exception is left alone so a
+    real failure still surfaces.
+    """
+    if message != "Future exception was never retrieved":
+        return False
+    text = f"{message} {exc}".lower()
+    return any(m in text for m in _BENIGN_ORPHAN_FUTURE_MARKERS)
+
+
+def _install_benign_future_handler() -> None:
+    """Silence orphaned-navigation-future noise on the running loop.
+
+    asyncio prints "Future exception was never retrieved" with a traceback for
+    these leaked futures, which makes a clean run look broken. The default
+    handler is preserved for everything else.
+    """
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:  # pragma: no cover - no running loop
+        return
+    default = loop.get_exception_handler()
+
+    def handler(loop, context):
+        if _is_benign_orphan_future(
+            context.get("message", ""), context.get("exception")
+        ):
+            return
+        if default is not None:
+            default(loop, context)
+        else:
+            loop.default_exception_handler(context)
+
+    loop.set_exception_handler(handler)
+
+
 async def async_main(argv: Optional[List[str]] = None) -> int:
+    _install_benign_future_handler()
     parser = build_parser()
     args = parser.parse_args(argv)
 
