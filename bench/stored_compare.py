@@ -41,22 +41,46 @@ def _intellixss(base: str, timeout: int):
 
 
 def _dalfox(base: str, binpath: str, timeout: int):
+    """Give Dalfox both stored shots and report a completed result.
+
+    Its dedicated ``sxss`` mode does not complete against this board (it is
+    allowed to time out). Its normal ``url`` mode *does* complete — it posts to
+    the write endpoint and checks the response — so it is the measured path: a
+    completed run that finds nothing is a real miss, not a timeout. Both the
+    write endpoint and the render page are tried.
+    """
+    # 1) sxss (dedicated stored) — best-effort; it tends to hang here.
     try:
         out = subprocess.run(
             [binpath, "sxss", base + "/comment", "-d", "comment=DALFOXSS",
              "--request-method", "POST", "--trigger", base + "/posts",
              "--format", "json", "--no-color", "--no-spinner", "--timeout", "10"],
-            capture_output=True, text=True, timeout=timeout,
+            capture_output=True, text=True, timeout=min(timeout, 60),
         ).stdout.strip()
         pocs = json.loads(out) if out else []
         real = [p for p in pocs if isinstance(p, dict) and p.get("type") in ("R", "V", "G")]
-        return len(real) > 0, any(p.get("type") == "V" for p in real)
+        if real:
+            return True, any(p.get("type") == "V" for p in real)
     except subprocess.TimeoutExpired:
-        print("  dalfox sxss: timed out", file=sys.stderr)
-        return False, False
+        print("  dalfox sxss: did not complete (timeout)", file=sys.stderr)
     except Exception as e:  # noqa: BLE001
-        print("  dalfox:", e, file=sys.stderr)
-        return False, False
+        print("  dalfox sxss:", e, file=sys.stderr)
+
+    # 2) url mode — completes; a 0-poc result here is a measured miss.
+    for ep, data, method in (("/comment", "comment=FUZZ", "POST"), ("/posts", None, "GET"), ("/", None, "GET")):
+        cmd = [binpath, "url", base + ep, "--format", "json", "--no-color",
+               "--no-spinner", "--skip-bav", "--timeout", "10"]
+        if data:
+            cmd += ["-d", data, "-X", method]
+        try:
+            out = subprocess.run(cmd, capture_output=True, text=True, timeout=min(timeout, 80)).stdout.strip()
+            pocs = json.loads(out) if out else []
+            real = [p for p in pocs if isinstance(p, dict) and p.get("type") in ("R", "V", "G")]
+            if real:
+                return True, any(p.get("type") == "V" for p in real)
+        except Exception as e:  # noqa: BLE001
+            print(f"  dalfox url {ep}:", e, file=sys.stderr)
+    return False, False  # completed (url mode) with no detection — a measured miss
 
 
 def _xsstrike(base: str, xdir: str, timeout: int):
