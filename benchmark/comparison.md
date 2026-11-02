@@ -1,14 +1,14 @@
 # Head-to-head: IntelliXSS vs Dalfox vs XSStrike
 
-All scanners were pointed at the identical local range (`bench/range.py`): 10 vulnerable endpoints across distinct contexts and 10 clean controls that reflect safely or not at all. XSStrike is scored by its own `Efficiency` metric (a payload at 100 = working), not its recon lines, so the comparison is fair to it. Reproduce with `python bench/compare.py --with-xsstrike …` (below).
+All scanners were pointed at the identical local range (`bench/range.py`): 10 vulnerable endpoints across distinct contexts and 11 clean controls that reflect safely or not at all. XSStrike is scored by its own `Efficiency` metric (a payload at 100 = working), not its recon lines, so the comparison is fair to it. Reproduce with `python bench/compare.py --with-xsstrike …` (below).
 
 ## Scorecard
 
 | Scanner | Recall (found/total) | Confirmed by execution | False positives | Precision | Time |
 |---|---|---|---|---|---|
-| IntelliXSS | 10/10 (100%) | 10/10 | 0/10 | 100% | 75.2s |
-| Dalfox | 10/10 (100%) | 10/10 | 7/10 | 59% | 246.2s |
-| XSStrike | 10/10 (100%) | 0/10 | 0/10 | 100% | 117.4s |
+| IntelliXSS | 10/10 (100%) | 10/10 | 0/11 | 100% | 77.6s |
+| Dalfox | 10/10 (100%) | 10/10 | 8/11 | 56% | 247.5s |
+| XSStrike | 10/10 (100%) | 0/10 | 1/11 | 91% | 103.3s |
 
 *Confirmed by execution* means the payload was proven to run (IntelliXSS: the unique marker came back in a headless browser; Dalfox: a `V`/verified PoC). A plain *found* is reflection only.
 
@@ -28,6 +28,7 @@ All scanners were pointed at the identical local range (`bench/range.py`): 10 vu
 | trap_title | `rawtext_title` | no (control) | ok | **false +** | ok |
 | trap_noscript | `noscript` | no (control) | ok | **false +** | ok |
 | trap_template | `template` | no (control) | ok | CONFIRMED | ok |
+| trap_csp | `html_text_csp` | no (control) | ok | CONFIRMED | **false +** |
 | hard_tag_block | `html_text_tagblock` | yes | CONFIRMED | CONFIRMED | found |
 | hard_attr_events | `attr_double_eventblock` | yes | CONFIRMED | CONFIRMED | found |
 | safe_escaped | `html_text_escaped` | no (control) | ok | ok | ok |

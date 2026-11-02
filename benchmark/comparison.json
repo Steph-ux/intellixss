@@ -12,6 +12,7 @@
     "trap_title": "rawtext_title",
     "trap_noscript": "noscript",
     "trap_template": "template",
+    "trap_csp": "html_text_csp",
     "hard_tag_block": "html_text_tagblock",
     "hard_attr_events": "attr_double_eventblock",
     "safe_escaped": "html_text_escaped",
@@ -38,6 +39,7 @@
     "trap_title",
     "trap_noscript",
     "trap_template",
+    "trap_csp",
     "safe_escaped",
     "safe_attr_escaped",
     "safe_noreflect",
@@ -50,7 +52,7 @@
       "true_positives": 10,
       "vuln_total": 10,
       "false_positives": 0,
-      "clean_total": 10,
+      "clean_total": 11,
       "confirmed": 10,
       "recall": 1.0,
       "precision": 1.0,
@@ -103,6 +105,10 @@
           false,
           false
         ],
+        "trap_csp": [
+          false,
+          false
+        ],
         "hard_tag_block": [
           true,
           true
@@ -136,16 +142,16 @@
           false
         ]
       },
-      "seconds": 75.2
+      "seconds": 77.6
     },
     "dalfox": {
       "true_positives": 10,
       "vuln_total": 10,
-      "false_positives": 7,
-      "clean_total": 10,
+      "false_positives": 8,
+      "clean_total": 11,
       "confirmed": 10,
       "recall": 1.0,
-      "precision": 0.588,
+      "precision": 0.556,
       "per_endpoint": {
         "reflect_html": [
           true,
@@ -195,6 +201,10 @@
           true,
           true
         ],
+        "trap_csp": [
+          true,
+          true
+        ],
         "hard_tag_block": [
           true,
           true
@@ -228,16 +238,16 @@
           false
         ]
       },
-      "seconds": 246.2
+      "seconds": 247.5
     },
     "xsstrike": {
       "true_positives": 10,
       "vuln_total": 10,
-      "false_positives": 0,
-      "clean_total": 10,
+      "false_positives": 1,
+      "clean_total": 11,
       "confirmed": 0,
       "recall": 1.0,
-      "precision": 1.0,
+      "precision": 0.909,
       "per_endpoint": {
         "reflect_html": [
           true,
@@ -287,6 +297,10 @@
           false,
           false
         ],
+        "trap_csp": [
+          true,
+          false
+        ],
         "hard_tag_block": [
           true,
           false
@@ -320,7 +334,7 @@
           false
         ]
       },
-      "seconds": 117.4
+      "seconds": 103.3
     }
   }
 }
