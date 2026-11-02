@@ -60,6 +60,10 @@ ENDPOINTS = {
     # browser flags it — but nothing runs. Only a real browser gets this right.
     "trap_noscript": (False, "noscript", "<noscript>{q}</noscript>"),
     "trap_template": (False, "template", "<template>{q}</template>"),
+    # Reflects raw in HTML text, but the response carries a strict CSP that
+    # blocks inline execution — so it is not exploitable. A CSP-aware scanner
+    # clears it; a character-survival one false-positives.
+    "trap_csp": (False, "html_text_csp", "<div>{q}</div>"),
 
     # --- vulnerable, harder (tests filter-bypass depth) ---
     # Blocks the two most common tags; a scanner must reach for another.
@@ -84,6 +88,10 @@ ENDPOINTS = {
 }
 
 PAGE = "<!doctype html><html><head><title>range</title></head><body>{inner}</body></html>"
+
+# Endpoints served with a strict Content-Security-Policy that blocks inline
+# execution; their reflection is live but inert, so they are clean controls.
+_CSP_ENDPOINTS = {"trap_csp"}
 
 
 def render(name: str, q: str) -> str:
@@ -160,11 +168,18 @@ class Handler(BaseHTTPRequestHandler):
             self._send(b"not found", status=404)
             return
         q = parse_qs(parts.query).get("q", [""])[0]
-        self._send(render(name, q).encode())
+        # A strict-CSP control reflects raw but is served with a policy that
+        # forbids inline execution, so the reflection is not exploitable — a
+        # browser/CSP-aware scanner must not report it; a character-survival one
+        # cannot tell and false-positives.
+        csp = "default-src 'none'; script-src 'none'" if name in _CSP_ENDPOINTS else ""
+        self._send(render(name, q).encode(), csp=csp)
 
-    def _send(self, body: bytes, status: int = 200):
+    def _send(self, body: bytes, status: int = 200, csp: str = ""):
         self.send_response(status)
         self.send_header("Content-Type", "text/html; charset=utf-8")
+        if csp:
+            self.send_header("Content-Security-Policy", csp)
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
