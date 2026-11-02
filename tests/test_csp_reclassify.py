@@ -19,7 +19,7 @@ from intellixss.config import Config
 from intellixss.scanner.orchestrator import Scanner
 
 
-def _make(csp: str):
+def _make(csp: str, header: str = "Content-Security-Policy"):
     class _H(BaseHTTPRequestHandler):
         def log_message(self, *a):
             pass
@@ -29,7 +29,7 @@ def _make(csp: str):
             body = f"<!doctype html><html><body><div>{q}</div></body></html>".encode()
             self.send_response(200)
             if csp:
-                self.send_header("Content-Security-Policy", csp)
+                self.send_header(header, csp)
             self.send_header("Content-Type", "text/html")
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
@@ -38,8 +38,8 @@ def _make(csp: str):
     return _H
 
 
-def _serve(csp: str):
-    srv = ThreadingHTTPServer(("127.0.0.1", 0), _make(csp))
+def _serve(csp: str, header: str = "Content-Security-Policy"):
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), _make(csp, header))
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     return srv, f"http://127.0.0.1:{srv.server_address[1]}"
 
@@ -68,3 +68,36 @@ def test_reflection_without_csp_is_still_a_finding():
     finally:
         srv.shutdown()
     assert result.findings, "a reflection with no CSP must still be reported"
+
+
+def test_report_only_csp_does_not_reclassify():
+    """A strict policy sent *Report-Only* blocks nothing, so the reflection
+    stays a finding — reclassifying it would hide a real XSS behind a policy
+    that only reports violations."""
+    srv, base = _serve(
+        "default-src 'none'; script-src 'none'",
+        header="Content-Security-Policy-Report-Only",
+    )
+    try:
+        result = _scan(f"{base}/?q=1")
+    finally:
+        srv.shutdown()
+    assert result.findings, (
+        "a Report-Only CSP enforces nothing — the reflection must still be reported"
+    )
+    assert not any("csp-strict" in (d.signals or []) for d in result.diagnoses)
+
+
+def test_reclassified_diagnosis_names_the_directive():
+    srv, base = _serve("script-src 'self' https://cdn.example.com")
+    try:
+        result = _scan(f"{base}/?q=1")
+    finally:
+        srv.shutdown()
+    assert result.findings == []
+    csp_diag = [d for d in result.diagnoses if "csp-strict" in (d.signals or [])]
+    assert csp_diag, "a strict script-src must reclassify the reflection"
+    assert "cdn.example.com" in csp_diag[0].detail, (
+        "the diagnosis must name the enforcing script-src so a reviewer can "
+        "look for an allowlisted-origin bypass"
+    )

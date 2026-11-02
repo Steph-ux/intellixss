@@ -271,6 +271,16 @@ class Scanner:
         # the count is what bounds the guesses on a small budget.
         self._route_attempts: Dict[Tuple[str, str], int] = {}
         self._mute = False
+        # CSP read per page during a scan, so the confirmer can skip a browser
+        # navigation that a strict, enforced policy makes impossible instead of
+        # waiting out the timeout. Reset per scan. ``self._client`` is the live
+        # HTTP client, held only for the duration of a scan so helpers can read
+        # a page's headers lazily.
+        self._csp_by_page: Dict[str, object] = {}
+        self._client = None
+        # Findings whose browser confirmation was skipped because their own page
+        # carries an enforced strict CSP; reclassified to CSP-mitigated leads.
+        self._csp_gated_ids: set = set()
 
     # ------------------------------------------------------------------
     # top level
@@ -279,6 +289,9 @@ class Scanner:
     async def scan(self, target_url: str) -> ScanResult:
         result = ScanResult(target_url=target_url)
         result.stats.started_at = time.monotonic()
+        self._csp_by_page = {}
+        self._client = None
+        self._csp_gated_ids = set()
         self._log(f"IntelliXSS v3.3 — scanning {target_url}", "title")
         self._log(
             f"workers={self.config.workers}  rate={self.config.rate_limit}/s  "
@@ -315,6 +328,7 @@ class Scanner:
             async with HttpClient(
                 self.config, extra_headers=auth_headers, cookies=auth_cookies
             ) as client:
+                self._client = client
                 status, body, headers, final_url = await client.request("GET", target_url)
                 if status < 400 and _is_login_redirect(target_url, final_url):
                     # No credential was configured, but the site answered with
@@ -341,6 +355,9 @@ class Scanner:
                 waf_filters, waf_name, signals = detect_waf(headers, body, status)
                 result.waf = waf_name
                 csp = analyze_csp(headers)
+                self._csp_by_page[_csp_page_key(target_url)] = csp
+                if final_url:
+                    self._csp_by_page.setdefault(_csp_page_key(final_url), csp)
                 if waf_name:
                     self._log(
                         f"WAF fingerprint: {waf_name}  signals={signals}", "warn"
@@ -353,9 +370,15 @@ class Scanner:
                             signals=signals,
                         )
                     )
-                if csp and csp.strict:
+                if csp and csp.enforced_strict:
                     self._log(
                         "CSP is strict — inline script and event handlers will not execute",
+                        "warn",
+                    )
+                elif csp and csp.strict and csp.report_only:
+                    self._log(
+                        "CSP is strict but Report-Only — it reports violations, "
+                        "blocks nothing; findings are not CSP-mitigated",
                         "warn",
                     )
 
@@ -587,56 +610,82 @@ class Scanner:
         else:
             self._log("blind: no injection point accepted a beacon", "warn")
 
+    async def _page_csp(self, page_url: str):
+        """CSP for *page_url*, read once per scan and cached.
+
+        The confirmer and the end-of-scan reclassification share this so a page
+        is fetched for its headers at most once. Fetched lazily through the live
+        HTTP client held for the scan; a page whose headers cannot be read
+        caches ``None`` and is treated as having no CSP (the safe default: it is
+        confirmed/kept, never silently reclassified as mitigated).
+        """
+        key = _csp_page_key(page_url)
+        if key in self._csp_by_page:
+            return self._csp_by_page[key]
+        csp = None
+        client = self._client
+        if client is not None and key:
+            try:
+                _st, _b, hdrs, _fin = await client.request("GET", page_url.split("#")[0])
+                csp = analyze_csp(hdrs)
+            except Exception:
+                csp = None
+        self._csp_by_page[key] = csp
+        return csp
+
     async def _reclassify_csp_blocked(self, client: HttpClient, result: ScanResult) -> None:
-        """Move reflection-level findings that a strict CSP blocks to diagnoses.
+        """Move unconfirmed inline-vector findings a strict CSP blocks to leads.
 
         Every reflected XSS finding relies on inline execution — a tag's script,
-        an event handler, a ``javascript:`` URL. A page served with a strict CSP
-        (``script-src``/``default-src`` without ``'unsafe-inline'`` or ``*``)
-        blocks all of those, so a reflection the browser could not run there is
-        not exploitable as it stands. Such a finding is reclassified to a
-        CSP-blocked lead rather than reported as a vulnerability. A
-        browser-confirmed finding is never touched (if it ran under the CSP, the
-        policy was bypassed — a real finding), and the CSP is read from each
-        finding's own page so one on a page without CSP is left alone.
+        an event handler, a ``javascript:`` URL, ``eval()``. A page served with
+        an *enforced* strict CSP (``script-src``/``default-src`` without
+        ``'unsafe-inline'``/``'unsafe-eval'``/``data:``/``*``) blocks all of
+        those, so a payload the browser could not run there is not exploitable
+        as it stands and is reclassified to a CSP-mitigated lead rather than
+        reported as a vulnerability.
+
+        Scope: a finding that is not browser-confirmed and is either a reflection
+        the confirmer couldn't run, or one whose browser confirmation the CSP
+        pre-gate skipped. A ``-Report-Only`` policy blocks nothing and never
+        triggers this; a browser-confirmed finding is never touched (if it ran
+        under the CSP, the policy was bypassed — a real finding); the CSP is read
+        from each finding's own page, so one on a page without CSP is left alone.
         """
-        reflective = [
+        candidates = [
             f for f in result.findings
-            if not f.browser_confirmed and f.verified_by == "reflection"
+            if not f.browser_confirmed
+            and (f.verified_by == "reflection" or id(f) in self._csp_gated_ids)
         ]
-        if not reflective:
+        if not candidates:
             return
-        csp_by_page: Dict[str, object] = {}
         blocked_ids = set()
-        for f in reflective:
+        for f in candidates:
             page = f.url.split("#")[0]
-            if page not in csp_by_page:
-                try:
-                    _st, _b, hdrs, _fin = await client.request("GET", page)
-                    csp_by_page[page] = analyze_csp(hdrs)
-                except Exception:
-                    csp_by_page[page] = None
-            csp = csp_by_page[page]
-            if csp is not None and getattr(csp, "strict", False):
+            csp = await self._page_csp(page)
+            if csp is not None and getattr(csp, "enforced_strict", False):
                 blocked_ids.add(id(f))
+                src = getattr(csp, "effective_script_src", "") or "'none'"
                 result.diagnoses.append(
                     BlockDiagnosis(
                         reason=BlockReason.FILTERED_PAYLOAD,
                         detail=(
                             f"{f.parameter}: reflected in {f.context.value}, but the "
-                            f"page's strict Content-Security-Policy blocks inline "
-                            f"execution — not exploitable as it stands"
+                            f"page's enforced Content-Security-Policy "
+                            f"(script-src {src}) blocks inline execution — not "
+                            f"exploitable as it stands"
                         ),
                         signals=["csp-strict"],
                         suggestion=(
                             "The reflection is live but the CSP blocks the payload's "
-                            "vector; review for a CSP bypass before treating it as XSS."
+                            "vector; review for a CSP bypass (allowlisted origin with "
+                            "a JSONP/gadget, 'strict-dynamic', a lax object/base-uri) "
+                            "before treating it as XSS."
                         ),
                     )
                 )
                 self._log(
-                    f"csp: reclassified reflected {f.parameter} on {page[:60]} "
-                    f"— strict CSP blocks inline execution",
+                    f"csp: reclassified {f.parameter} on {page[:60]} "
+                    f"— enforced strict CSP blocks inline execution",
                     "info",
                 )
         if blocked_ids:
@@ -2246,6 +2295,29 @@ class Scanner:
         if finding.method.upper() != "GET" or not finding.url:
             return
 
+        # CSP pre-gate. When the finding's own page carries an *enforced* strict
+        # CSP, no inline payload the scanner injects — a handler, an inline
+        # <script>, a javascript: URL, eval() — can execute there, so a browser
+        # navigation can only time out its way to the same "no execution"
+        # verdict. On a real site that is several 12s timeouts per finding spent
+        # to learn nothing. Skip it, record the enforcing directive, and let the
+        # reclassification turn it into an explained CSP-mitigated lead. A
+        # Report-Only policy blocks nothing and is deliberately not gated here.
+        csp = await self._page_csp(finding.url)
+        if csp is not None and getattr(csp, "enforced_strict", False):
+            self._csp_gated_ids.add(id(finding))
+            src = getattr(csp, "effective_script_src", "") or "'none'"
+            finding.evidence = (
+                f"{finding.evidence} | csp-strict: enforced script-src {src} "
+                f"blocks inline execution — browser confirmation skipped"
+            )
+            self._log(
+                f"csp-strict — skipping browser confirmation for "
+                f"{finding.parameter or '(fragment)'} (enforced script-src: {src[:60]})",
+                "info",
+            )
+            return
+
         marker = marker or finding.marker or mark_of(finding.payload)
         base = finding.url.split("#")[0]
         # Fragment payloads are refuted in order: a gadget loader takes a script
@@ -3033,6 +3105,19 @@ def _allowlist_attr_payloads(marker: str) -> List[str]:
         out += [tpl.format(call=value) for tpl in _ANIMATED_ATTR_PAYLOADS]
     seen: set = set()
     return [p for p in out if not (p in seen or seen.add(p))]
+
+
+def _csp_page_key(url: str) -> str:
+    """Canonical per-page key for CSP caching: scheme://host/path.
+
+    CSP is a response header that in practice depends on the path, not the query
+    string. Keying on the path alone lets the main page and its query-bearing
+    findings share one lookup (and one header fetch) instead of one per payload.
+    """
+    from urllib.parse import urlsplit, urlunsplit
+
+    p = urlsplit(url or "")
+    return urlunsplit((p.scheme, (p.netloc or "").lower(), p.path or "/", "", ""))
 
 
 def _finding_key(f: XSSFinding) -> str:

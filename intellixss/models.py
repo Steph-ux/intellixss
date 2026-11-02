@@ -257,11 +257,24 @@ class _CspInfo:
     strict: bool = False  # no unsafe-inline and no wildcard nonces → HTML sinks dead
     directives: Dict[str, str] = field(default_factory=dict)
     blocked_vectors: List[str] = field(default_factory=list)
+    # A ``-Report-Only`` policy reports violations but blocks nothing, so it
+    # must never be used to skip or reclassify a finding as mitigated.
+    report_only: bool = False
+    # The ``script-src``/``default-src`` value that gates inline execution,
+    # kept so a report can name exactly what blocks the payload.
+    effective_script_src: str = ""
+
+    @property
+    def enforced_strict(self) -> bool:
+        """Strict *and* actually enforced (not report-only)."""
+        return self.strict and self.present and not self.report_only
 
     def to_dict(self) -> Dict[str, Any]:
         return {
             "present": self.present,
             "strict": self.strict,
+            "report_only": self.report_only,
+            "effective_script_src": self.effective_script_src,
             "directives": self.directives,
             "blocked_vectors": self.blocked_vectors,
         }
