@@ -33,6 +33,11 @@ python intellixss.py -u https://target/ --deep -w 6 -r 6 -o report.json --html r
 # Machine-readable output on stdout
 python intellixss.py -u https://target/ --json > report.json
 
+# Recon pipeline: feed URLs on stdin (deduplicated, comments skipped)
+gau target.com | python intellixss.py --pipe --json > report.json
+cat urls.txt | python intellixss.py --json      # stdin auto-detected when piped
+gau target.com | python intellixss.py --jsonl | jq -r 'select(.severity=="high")'
+
 # Authenticated
 python intellixss.py -u https://app/ --cookie 'session=abc'
 python intellixss.py -u https://app/ --bearer eyJ...
@@ -62,9 +67,11 @@ report       console, JSON, HTML - all scored from the same CVSS table
 
 | Flag | Meaning |
 |------|---------|
-| `-u` / `-l` | Target URL / file of URLs, one per line |
+| `-u` / `-l` | Target URL / file of URLs, one per line (`-l -` reads stdin) |
+| `--pipe` | Read target URLs from stdin, one per line — for recon pipelines |
 | `-o` / `--html` | JSON report path / HTML report path |
 | `--json` | Serialised result on stdout and nothing else |
+| `--jsonl` | Stream one compact JSON object per finding as each URL completes (line-delimited) |
 | `-w` / `-r` | Workers (default 4) / requests per second (default 4) |
 | `--timeout` / `--retries` | Per-request timeout / transient retries |
 | `--max-payloads` | Payloads per parameter per stage (default 25) |
@@ -73,8 +80,11 @@ report       console, JSON, HTML - all scored from the same CVSS table
 | `--max-confirm` | Browser navigations per host (default 12) |
 | `--write` | Allow `POST`/`PUT`/`PATCH`/`DELETE` payloads. Off by default |
 | `--deep` | Also run header, redirect, JSON, GraphQL and upload plugins |
+| `--crawl` | Follow same-origin links from the seed and scan each page's own forms and parameters (depth `--crawl-depth`, default 2) |
+| `--blind URL` | Deliver out-of-band beacon payloads to a collaborator host (interactsh/OAST, XSS Hunter, Burp). Delivered, not confirmed — watch your listener |
+| `--blind-header` | With `--blind`, also inject beacons into request headers |
 | `-a` / `--aggressive` | Keep going after a hit: all payloads, all parameters |
-| `--guess-params` | Also try conventional parameter names the page never links to |
+| `--guess-params` | Mine parameter names from the page's own markup and JS, plus a dictionary, and try the ones it never links to (proven with a canary) |
 | `-v` / `--verbose` | Character survival and per-technique decisions |
 | `-s` / `--silent` | Findings only |
 | `--version` | Print the version |
@@ -101,6 +111,27 @@ because the page may have raised it itself.
 An encoded character is not usable syntax. If the target turns `<` into
 `&lt;`, families that need a tag are dropped rather than attempted.
 
+## Blind / out-of-band XSS
+
+A blind XSS fires in a browser the scanner never drives — a support agent
+reading a ticket, an admin viewing a log. It cannot be confirmed here, so
+`--blind <URL>` does not pretend to: it delivers beacon payloads to an
+operator-controlled collaborator (interactsh / OAST, XSS Hunter, Burp
+Collaborator) and records each *delivery*, never a confirmation.
+
+```bash
+python intellixss.py -u https://app/ --write --blind https://abcd.oast.pro --blind-header
+```
+
+Every beacon carries the injection point's own unique `ixm…` marker, as both a
+path segment and a wildcard-DNS sub-domain, so when one fires out of band the
+hit on your collaborator names the exact parameter or header that carried it.
+Deliveries are listed in the console and under `blind_deliveries` in the JSON
+report, labelled `UNCONFIRMED`, and are never counted as findings — execution,
+if any, happens where only your listener can see it. Writing into stored sinks
+still requires `--write`; without it only `GET` parameters and headers carry
+beacons.
+
 ## What it detects
 
 - **Reflected** in HTML text, quoted and unquoted attributes, comments,
@@ -113,11 +144,17 @@ An encoded character is not usable syntax. If the target turns `<` into
 - **Browser-owned sources** (`document.referrer`, `window.name`, cookies) are
   seeded before the document parses, so the finding is proven or not.
 - **Stored**, server-side and client-side (form to render), including flows
-  that need login first. Writing records is the one destructive thing a scan
-  can do, so it is opt-in: without `--write` no `POST`, `PUT`, `PATCH` or
-  `DELETE` reaches the target, and the browser stages that drive a page's own
-  form still run. The refusal lives in the HTTP client rather than in each
-  plugin, so a new plugin cannot bypass it by forgetting a flag.
+  that need login first, and **including records that surface on a different
+  page from the one that takes the write** — a comment posted to `/comment`
+  that renders on `/posts`. The pass looks for its marker on the same-origin
+  pages the site links to, so it correlates the write and the render without
+  being told where the record appears (the cross-endpoint step a scanner with
+  no stored workflow cannot do, and that others need an explicit trigger URL
+  for). Writing records is the one destructive thing a scan can do, so it is
+  opt-in: without `--write` no `POST`, `PUT`, `PATCH` or `DELETE` reaches the
+  target, and the browser stages that drive a page's own form still run. The
+  refusal lives in the HTTP client rather than in each plugin, so a new plugin
+  cannot bypass it by forgetting a flag.
 - **AngularJS template injection** when an `ng-app` scope loads a compiler.
   A document whose expressions evaluate but whose scope value is a string can
   be compile-only; the scanner detects this from source shape and says so.
@@ -221,6 +258,92 @@ roster does not reach them.
 
 Full method, per-surface results and the reason for each miss:
 `benchmark/juiceshop-report.md`.
+
+### Versus Dalfox and XSStrike
+
+A labelled range (`bench/range.py`) points every scanner at the identical
+endpoints — ten exploitable across distinct contexts, ten clean controls that
+reflect safely or not at all — and scores each the same way. XSStrike is scored
+by its own `Efficiency` metric (a payload at 100 = working), not its recon
+lines, so the comparison is fair to it. Measured run
+(`python bench/compare.py --with-xsstrike ./XSStrike`):
+
+| Scanner | Recall | Confirmed by execution | False positives | Precision | Time |
+|---------|--------|------------------------|-----------------|-----------|------|
+| **IntelliXSS** | **10/10** | **10/10** | **0/10** | **100%** | **75s** |
+| Dalfox | 10/10 | 10/10 | 7/10 | 59% | 246s |
+| XSStrike | 10/10 | 0/10 | 0/10 | 100% | 117s |
+
+All three find every vulnerable endpoint, and on these contexts XSStrike is as
+precise as IntelliXSS — so the separation is on **proof** and on **Dalfox's
+over-reporting**:
+
+- **Dalfox** confirms its findings in a browser but reports seven reflections
+  that cannot be exploited (a stripped `<`, an escaped attribute quote, a
+  neutralised JS string, and payloads inert inside `<textarea>`, `<title>`,
+  `<noscript>` and `<template>`): 59% precision. One of those — the
+  `<template>` case — it even reports as *verified*, though a real browser
+  never runs it: a confirmation that is itself wrong.
+- **XSStrike** is precise but confirms nothing — it has no browser, so every
+  finding is reflection only. `0/10` proven.
+- **IntelliXSS** reports none of the dead reflections (its headless browser
+  agrees that inert-container and escaped reflections do not run) *and* replays
+  all ten real ones with the payload's own marker: 100% precision **and** 10/10
+  proven, in under a third of Dalfox's time.
+
+That is the thesis, measured: a finding is only as strong as its evidence.
+IntelliXSS is Pareto-optimal here — never worse than either tool on any axis,
+strictly better than Dalfox on precision and than XSStrike on proof, and the
+fastest of the three. (On reflected contexts XSStrike matches IntelliXSS on
+recall and precision; IntelliXSS's decisive edges over it are execution proof
+and the coverage below.) Reproduce with
+`python bench/compare.py --with-xsstrike ./XSStrike`; per-endpoint results in
+`benchmark/comparison.md`.
+
+**Whole site, root only — the realistic test.** The table above hands each tool
+the exact vulnerable URL, and under that artificial condition XSStrike matches
+IntelliXSS on the reflected endpoints. The real task is a *site*:
+`bench/site_range.py` puts four XSS behind one root — three reflected (a link
+param, a filter param, a form two hops deep) and one stored (posted on a
+guestbook, rendered on `/posts`). Given only `http://host/`:
+
+| Scanner | Invocation | XSS found |
+|---------|-----------|-----------|
+| **IntelliXSS** | `-u / --crawl --write` | **4/4, all browser-confirmed** |
+| Dalfox | `url /` | 0/4 |
+| XSStrike | `-u / --crawl` | 0/4 |
+
+Given a site instead of a list of exact injection points, IntelliXSS finds and
+proves every XSS; both competitors find none. This is where the reflected-endpoint
+tie with XSStrike disappears — it depended on being handed the URL, which no
+real engagement does.
+
+**Discovery (root-only).** The table gives every scanner the exact vulnerable
+URL. The other half of being the best is what each finds given only a site
+**root**. `bench/crawl_range.py` hides three reflected XSS off the index: a
+link-revealed GET param (`/search?q=`), a one-hop filter param
+(`/products?category=`), and a form two hops deep (`/feedback`). Pointed at the
+root, **IntelliXSS `--crawl` finds and browser-confirms all three (3/3); Dalfox
+and XSStrike find 0/3.** IntelliXSS follows same-origin links and scans each
+page's parameters and forms; a single-URL scan never leaves the root, and a
+form-only crawler misses link-reachable GET params. On realistic root-only
+usage IntelliXSS reaches injection points **both** competitors miss.
+
+**Stored XSS — the class that breaks the recall tie.** Stored XSS is the most
+severe XSS class, and it is where the reflected-endpoint parity with XSStrike
+ends. Given each tool its *best* stored shot (`bench/stored_compare.py`) against
+a cross-page board (post `/comment` → render `/posts`): **IntelliXSS** detects
+it (`-u / --write --crawl` — crawls to `/posts`, correlates write with render);
+**XSStrike** cannot, by construction (no inject-here/verify-there mode) — a
+completed miss; and **Dalfox**'s dedicated `sxss` mode, even handed the exact
+trigger, did not finish in 320s (still grinding 672 queries on one worker),
+so its stored result is *undetermined* — not scored as a miss, but a real
+usability failure on a one-form board. So on a corpus that includes stored XSS,
+recall against XSStrike is **IntelliXSS 11/11 vs 10/11** — a strict recall win,
+since stored XSS is a class XSStrike structurally cannot test. (Cross-page
+stored is reported at reflection confidence when the render page was already
+written to by an earlier stage; it browser-confirms otherwise, e.g. the
+whole-site run above — see `AUDIT.md`.)
 
 ## Architecture
 

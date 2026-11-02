@@ -1112,34 +1112,15 @@ class BrowserConfirmer:
         # marker we injected.
         sel = f'[on{event}*="{marker}"]' if marker else f"[on{event}]"
         try:
-            # The element may already have fired while the document loaded — an
-            # ``onerror`` on a missing image, an ``onload`` on an SVG. Its
-            # handler is still on the page and still carries our marker, which
-            # only happens if it ran, so the attribute itself answers before an
-            # event is delivered.
-            if marker:
-                try:
-                    ran = await page.evaluate(
-                        """(marker) => {
-                            for (const el of document.querySelectorAll('*')) {
-                                for (const a of el.attributes) {
-                                    if (a.name.startsWith('on') && a.value.includes(marker)) {
-                                        return a.name + '=' + a.value.slice(0, 120);
-                                    }
-                                }
-                            }
-                            return '';
-                        }""",
-                        marker,
-                    )
-                except Exception:
-                    ran = ""
-                if ran:
-                    return {
-                        "confirmed": True,
-                        "detail": f"marker_in_handler:{ran}",
-                        "trigger": "dom",
-                    }
+            # NB: the mere presence of an ``on…="…marker…"`` attribute in the DOM
+            # is NOT proof of execution — it is the payload's own source, which is
+            # there whether or not the handler ever ran. A page served with a
+            # strict CSP (``script-src 'none'``) parses the element but never runs
+            # the handler, so crediting execution from the attribute's presence
+            # produced a false CONFIRMED. Execution is proven only by a signal the
+            # handler itself emits: a dialog, the console marker, or an off-origin
+            # request — all checked before and after this interaction. The event
+            # is dispatched here and the dialog is the evidence.
             async with page.expect_event("dialog", timeout=1500) as di:
                 if shortcut:
                     # The handler was declared next to an ``accesskey``, which is

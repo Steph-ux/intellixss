@@ -87,6 +87,19 @@ regex analyser's answer is what the scanner uses there today.
 **Proof.** `tests/test_js_scope_parity.py`, `tests/test_js_argument_propagation.py`,
 `tests/test_js_engine_limits.py`, `tests/test_dom_engine_switch.py`.
 
+## Fixed: false CONFIRMED under a strict CSP
+
+An event-handler payload (`<svg onload=alert('ixm…')>`) is parsed into the DOM,
+so its `on…` attribute carries the marker whether or not the handler ran. The
+confirmer had a shortcut that read execution from the attribute's *presence* —
+but that is the payload's source, not proof it executed. Under
+`script-src 'none'` the handler never runs (verified in a real browser), yet
+the shortcut reported `CONFIRMED`. Removed: execution is now credited only from
+a signal the handler emits — a dialog, the console marker, or an off-origin
+request — so a CSP-blocked reflection is reported at reflection confidence, not
+confirmed (`tests/test_confirm_csp.py`). This was the worst class of error for
+an evidence-based scanner and it is gone.
+
 ## Known limits, stated rather than hidden
 
 * The regex analyser matches tainted names by text, so unrelated code that
@@ -102,3 +115,17 @@ regex analyser's answer is what the scanner uses there today.
   a lead. The stored plugin itself writes the method it is given
   (`tests/test_stored_refused_field.py`); the gate is the orchestrator's call
   site.
+* **Cross-page stored XSS is detected, and browser-confirmed when the render
+  page is reached by the crawl and not already polluted.** A record posted to
+  one endpoint and rendered on another (`/comment` → `/posts`) is correlated
+  through the site's same-origin links and, with `--crawl`, through every page
+  the crawl reached (`tests/test_stored_cross_url.py`,
+  `tests/test_crawler.py`). On a site where the render page is not written to by
+  an earlier stage, this now confirms in the browser (the unified
+  `bench/site_range.py` run: the stored sink is `CONFIRMED` across repeated
+  runs). It still falls back to reflection confidence when an earlier stage has
+  already written its own records to the render page: the markup probe that
+  gates confirmation then reads an accumulated page and its "did my element
+  survive" check (`_an_element_survives`) is defeated by the sibling records.
+  The finding is never dressed up as confirmed. Making confirmation robust to a
+  pre-polluted render page (isolate the probe's own record) is the open part.

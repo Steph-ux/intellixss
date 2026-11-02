@@ -79,13 +79,30 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     p.add_argument("-u", "--url", help="Target URL (path-scoped discovery)")
-    p.add_argument("-l", "--list", help="File with URLs (one per line)")
+    p.add_argument(
+        "-l",
+        "--list",
+        help="File with URLs (one per line); '-' reads from stdin",
+    )
+    p.add_argument(
+        "--pipe",
+        action="store_true",
+        help="Read target URLs from stdin, one per line (for recon pipelines)",
+    )
 
     out = p.add_argument_group("reporting")
     out.add_argument("-o", "--output", help="Write JSON report to path")
     out.add_argument("--html", help="Write HTML report to path")
     out.add_argument(
         "--json", action="store_true", help="Print JSON to stdout and nothing else"
+    )
+    out.add_argument(
+        "--jsonl",
+        action="store_true",
+        help=(
+            "Stream one compact JSON object per finding to stdout as each URL "
+            "completes (line-delimited) — for recon pipelines"
+        ),
     )
 
     perf = p.add_argument_group("performance")
@@ -136,6 +153,36 @@ def build_parser() -> argparse.ArgumentParser:
         "--deep",
         action="store_true",
         help="Also run header, redirect, JSON, GraphQL and upload plugins",
+    )
+    scan.add_argument(
+        "--crawl",
+        action="store_true",
+        help=(
+            "Follow same-origin links from the seed and scan every page's own "
+            "forms and parameters, not just the seed's (depth --crawl-depth)"
+        ),
+    )
+    scan.add_argument(
+        "--crawl-depth",
+        type=int,
+        default=2,
+        help="Link-following depth for --crawl (default 2)",
+    )
+    scan.add_argument(
+        "--blind",
+        dest="blind_url",
+        default="",
+        metavar="URL",
+        help=(
+            "Out-of-band (blind) XSS: deliver beacon payloads to an operator "
+            "collaborator host (interactsh/OAST, XSS Hunter, Burp). Delivered, "
+            "not confirmed — watch your listener for the ixm... marker"
+        ),
+    )
+    scan.add_argument(
+        "--blind-header",
+        action="store_true",
+        help="With --blind, also inject blind beacons into request headers",
     )
     scan.add_argument(
         "--write",
@@ -473,6 +520,93 @@ def render_cleanup(result: ScanResult, console: "Console") -> None:
         )
 
 
+def render_blind(result: ScanResult, console: "Console") -> None:
+    """Out-of-band beacons this scan delivered — explicitly unconfirmed.
+
+    A blind payload fires where the scanner never looks, so these are not
+    findings: they are deliveries. The operator watches their collaborator for
+    the marker, and the row says which parameter carried it.
+    """
+    if not result.blind_deliveries:
+        return
+    table = Table(
+        title="Blind payloads delivered (UNCONFIRMED — watch your OOB listener)",
+        title_style="bold yellow",
+        header_style="bold cyan",
+        expand=True,
+    )
+    table.add_column("Via", width=7)
+    table.add_column("Point", ratio=3)
+    table.add_column("Marker", width=14)
+    table.add_column("Beacon", ratio=3)
+    for d in result.blind_deliveries:
+        point = f"{d.get('method', '')} {d.get('parameter', '')}".strip()
+        table.add_row(
+            Text(str(d.get("via") or ""), style="dim"),
+            f"{point}  {str(d.get('url') or '')[:60]}",
+            Text(str(d.get("marker") or ""), style="magenta"),
+            str(d.get("oob") or ""),
+        )
+    console.print(table)
+    console.print(
+        f"  {len(result.blind_deliveries)} beacon(s) delivered. These are NOT "
+        "confirmed: execution, if any, happens in another user's browser. A hit "
+        "on your collaborator for one of the markers above is the proof.",
+        style="yellow",
+    )
+
+
+def jsonl_lines(result: ScanResult) -> List[dict]:
+    """Compact, line-delimited records for one scanned URL.
+
+    One object per finding, highest severity first, plus one per blind delivery
+    — each tagged with ``kind`` so a pipeline can tell a confirmed/reflected
+    finding from an unconfirmed out-of-band delivery. Flat and compact on
+    purpose: these are meant to be ``grep``/``jq``'d a line at a time, streamed
+    as each URL finishes rather than buffered into one document.
+    """
+    lines: List[dict] = []
+    findings = sorted(
+        result.findings, key=lambda f: f.severity.rank, reverse=True
+    )
+    for f in findings:
+        lines.append(
+            {
+                "kind": "finding",
+                "target_url": result.target_url,
+                "url": f.url,
+                "parameter": f.parameter,
+                "method": f.method,
+                "vulnerability_type": f.vulnerability_type,
+                "context": f.context.value,
+                "severity": f.severity.value,
+                "cvss": f.cvss["score"],
+                "verified_by": f.verified_by,
+                "verified_label": f.verified_label,
+                "browser_confirmed": f.browser_confirmed,
+                "confidence": round(f.confidence, 2),
+                "marker": f.marker,
+                "payload": f.payload,
+                "reproduce": reproduce_command(f),
+            }
+        )
+    for d in result.blind_deliveries:
+        lines.append(
+            {
+                "kind": "blind_delivery",
+                "target_url": result.target_url,
+                "url": d.get("url"),
+                "parameter": d.get("parameter"),
+                "method": d.get("method"),
+                "via": d.get("via"),
+                "verified_label": "UNCONFIRMED",
+                "marker": d.get("marker"),
+                "oob": d.get("oob"),
+            }
+        )
+    return lines
+
+
 def render_plain(result: ScanResult) -> None:
     """Fallback renderer: clean, greppable, no rich."""
     print(f"\n=== Scan summary: {result.target_url} ===")
@@ -496,6 +630,14 @@ def render_plain(result: ScanResult) -> None:
             print(f"    trigger: {f.trigger}")
         print(f"    evidence:{f.evidence[:200]}")
         print(f"    repro:   {reproduce_command(f)}")
+    if result.blind_deliveries:
+        print(
+            f"\n--- blind payloads delivered (UNCONFIRMED — watch your OOB "
+            f"listener): {len(result.blind_deliveries)} ---"
+        )
+        for d in result.blind_deliveries:
+            point = f"{d.get('method', '')} {d.get('parameter', '')}".strip()
+            print(f"  - [{d.get('via')}] {point}  marker={d.get('marker')}  {d.get('oob')}")
     if not result.findings:
         for d in result.diagnoses[:12]:
             print(f"  - [{d.reason.value}] status={d.status} {(d.detail or '')[:140]}")
@@ -522,6 +664,7 @@ async def _run_one(url: str, cfg: Config, quiet: bool) -> tuple[ScanResult, int]
             render_summary(result, console)
             render_findings(result, console, verbose=cfg.verbose)
             render_cleanup(result, console)
+            render_blind(result, console)
             render_diagnoses(result, console)
         else:
             render_plain(result)
@@ -553,6 +696,36 @@ def _say(msg: str, quiet: bool) -> None:
         print(f"{Fore.CYAN}{msg}{Style.RESET_ALL}")
 
 
+def _parse_url_lines(text: str) -> List[str]:
+    """URLs from a newline-separated blob, skipping blanks and ``#`` comments.
+
+    Shared by ``-l <file>`` and the stdin pipe so both accept the same format a
+    recon tool emits (one URL per line, comments allowed).
+    """
+    out: List[str] = []
+    for raw in text.splitlines():
+        line = raw.strip()
+        if line and not line.startswith("#"):
+            out.append(line)
+    return out
+
+
+def _dedupe_preserving_order(urls: List[str]) -> List[str]:
+    """Drop duplicate URLs while keeping first-seen order.
+
+    A pipeline that feeds ``gau``/``waybackurls`` output routinely repeats the
+    same URL hundreds of times; scanning each once is both correct and a large
+    time saving, and order is preserved so output stays predictable.
+    """
+    seen: set = set()
+    out: List[str] = []
+    for u in urls:
+        if u not in seen:
+            seen.add(u)
+            out.append(u)
+    return out
+
+
 async def async_main(argv: Optional[List[str]] = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -560,16 +733,29 @@ async def async_main(argv: Optional[List[str]] = None) -> int:
     urls: List[str] = []
     if args.url:
         urls.append(args.url)
-    if args.list:
+    if args.list and args.list != "-":
         path = Path(args.list)
         if not path.is_file():
             print(f"{Fore.RED}URL list not found: {args.list}{Style.RESET_ALL}")
             return 1
-        urls.extend(
-            line.strip()
-            for line in path.read_text(encoding="utf-8", errors="replace").splitlines()
-            if line.strip() and not line.strip().startswith("#")
-        )
+        urls.extend(_parse_url_lines(path.read_text(encoding="utf-8", errors="replace")))
+
+    # Stdin: either asked for explicitly (``--pipe`` / ``-l -``) or detected
+    # because stdin is a pipe and no target was named on the command line. The
+    # auto-detect is what lets ``cat urls.txt | intellixss`` work with no flag,
+    # the way a recon pipeline expects — but only when nothing else gave a URL,
+    # so an interactive run with no args still prints help instead of blocking
+    # on a read.
+    want_stdin = args.pipe or args.list == "-"
+    if not want_stdin and not urls and not sys.stdin.isatty():
+        want_stdin = True
+    if want_stdin:
+        try:
+            urls.extend(_parse_url_lines(sys.stdin.read()))
+        except Exception:
+            pass
+
+    urls = _dedupe_preserving_order(urls)
     if not urls:
         parser.print_help()
         return 1
@@ -599,7 +785,7 @@ async def async_main(argv: Optional[List[str]] = None) -> int:
         # ``--json`` means "machine-readable stdout and nothing else": the
         # scanner's own progress log writes to stdout too, so it has to be
         # silenced here, not only at render time.
-        silent=args.silent or args.json,
+        silent=args.silent or args.json or args.jsonl,
         timeout=args.timeout,
         max_payloads_per_param=args.max_payloads,
         output=args.output,
@@ -611,7 +797,22 @@ async def async_main(argv: Optional[List[str]] = None) -> int:
         retries=args.retries,
         adaptive_throttle=args.adaptive,
         max_confirm_per_host=args.max_confirm,
+        blind_url=getattr(args, "blind_url", "") or "",
+        blind_header=getattr(args, "blind_header", False),
+        crawl=getattr(args, "crawl", False),
+        max_crawl_depth=getattr(args, "crawl_depth", 2),
     )
+
+    if args.jsonl:
+        import json
+
+        code = 0
+        for url in urls:
+            result, rc = await _run_one(url, cfg, quiet=True)
+            code = max(code, rc)
+            for line in jsonl_lines(result):
+                print(json.dumps(line, separators=(",", ":")), flush=True)
+        return code
 
     if args.json:
         results = []

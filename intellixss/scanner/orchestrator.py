@@ -51,7 +51,11 @@ from intellixss.analysis.static_dom import (
 )
 from intellixss.auth import build_auth_cookies, build_auth_headers, form_login
 from intellixss.config import Config
-from intellixss.discovery.targets import discover_targets, fetch_page_scripts
+from intellixss.discovery.targets import (
+    discover_targets,
+    extract_links,
+    fetch_page_scripts,
+)
 from intellixss.http.client import (
     HttpClient,
     _UNSAFE_METHODS as UNSAFE_METHODS,
@@ -70,6 +74,11 @@ from intellixss.models import (
     ScanTarget,
     XSSFinding,
     mark_of,
+)
+from intellixss.payloads.blind import (
+    beacon_url,
+    build_blind_payloads,
+    normalize_oob,
 )
 from intellixss.payloads.generator import generate_payloads, make_marker
 from intellixss.payloads.waf_profiles import get_waf_payloads
@@ -132,6 +141,14 @@ _INJECTABLE_PROBE = re.compile(r"^[\w.\-/]*$")
 # the reflected scan waits for the result lock — so a page that stalls one of
 # them stalls the scan. Past this the pass is abandoned and the scan continues.
 _STORED_PASS_SECONDS = 180.0
+
+# Subresource paths that never render a stored record — excluded from the pages
+# the stored pass re-reads for its marker, so the budget is spent on documents.
+_SKIP_RENDER_EXT = re.compile(
+    r"\.(?:png|jpe?g|gif|webp|svg|ico|css|js|mjs|woff2?|ttf|eot|map|json|xml|"
+    r"pdf|zip|gz|mp4|webm|mp3|wav)(?:$|\?)",
+    re.I,
+)
 
 # Wall clock for one browser confirmation. The confirmer carries an internal
 # deadline, but only once the coroutine starts; a browser that is already
@@ -342,7 +359,10 @@ class Scanner:
                         "warn",
                     )
 
-                targets = await discover_targets(client, target_url, self.config)
+                crawled_pages: set = set()
+                targets = await discover_targets(
+                    client, target_url, self.config, pages_out=crawled_pages
+                )
                 self._log(f"{len(targets)} injectable target(s) discovered", "info")
 
                 sem = asyncio.Semaphore(max(1, self.config.workers))
@@ -365,7 +385,32 @@ class Scanner:
                 # per-host budget a handful of them is enough to leave the
                 # proven sink with nothing. Evidence goes first; the guesses
                 # take what is left, inside the reserve.
-                await self._stored_pass(client, target_url, targets, result, lock)
+                # Stored XSS often surfaces on a *different* page from the one
+                # that takes the write — a comment posted to /comment appears on
+                # /posts, the article, a moderation view. Collect the same-origin
+                # pages this document links to (and the discovered GET targets)
+                # so the stored pass can look for its marker there, not only on
+                # the form's own page. This is what a human does by hand and what
+                # a tool without it (XSStrike) and one needing an explicit
+                # --trigger (Dalfox) cannot do automatically.
+                render_pages = self._stored_render_pages(target_url, body, targets)
+                # Pages the crawl reached (a /posts listing with no parameter of
+                # its own among them) are also places a stored record surfaces.
+                for pg in sorted(crawled_pages):
+                    if pg not in render_pages:
+                        render_pages.append(pg)
+                await self._stored_pass(
+                    client, target_url, targets, result, lock, render_pages
+                )
+
+                # Blind / out-of-band delivery. Opt-in (``--blind``). Beacons
+                # are sent into every discovered point and recorded; none is a
+                # finding, because execution happens where the operator's
+                # collaborator sees it, not here.
+                if self.config.blind_url:
+                    await self._deliver_blind(
+                        client, target_url, targets, result, lock
+                    )
 
                 # Sources the URL cannot drive are invisible to the ladder, so
                 # the page is analysed directly for them. The document itself is
@@ -432,6 +477,104 @@ class Scanner:
             "title",
         )
         return result
+
+    # Headers an application commonly stores and later renders in a back-office
+    # view — the classic blind-XSS delivery surface. Injected only with
+    # ``--blind-header``; a value here reaches a human's browser, never the
+    # scanner's.
+    _BLIND_HEADERS = (
+        "User-Agent",
+        "Referer",
+        "X-Forwarded-For",
+        "X-Forwarded-Host",
+        "X-Real-IP",
+        "True-Client-IP",
+        "X-Api-Version",
+        "Origin",
+    )
+
+    async def _deliver_blind(
+        self,
+        client: HttpClient,
+        target_url: str,
+        targets: List[ScanTarget],
+        result: ScanResult,
+        lock: asyncio.Lock,
+    ) -> None:
+        """Deliver out-of-band beacon payloads and record each delivery.
+
+        One correlation marker per injection point, so an OOB hit names the
+        exact parameter (or header) that carried it. A delivery is recorded only
+        when the request actually reached the server — a refused write returns
+        the network-error shape, which is not a delivery. Nothing here is a
+        finding: the scanner cannot observe the beacon fire, so it reports what
+        it did (sent this, watch your listener), never a confirmation.
+        """
+        oob = self.config.blind_url
+        base, _ = normalize_oob(oob)
+        if not base:
+            self._log(f"blind: ignoring unusable --blind target {oob!r}", "warn")
+            return
+
+        async def _record(url: str, parameter: str, method: str, via: str) -> int:
+            marker = make_marker(secrets.token_hex(4))
+            payloads = build_blind_payloads(oob, marker)
+            if not self.config.aggressive:
+                payloads = payloads[:6]
+            delivered = False
+            last_status = 0
+            for p in payloads:
+                try:
+                    if via == "header":
+                        st, _b, _h, _f = await client.request(
+                            "GET", url, headers={parameter: p}
+                        )
+                    else:
+                        st, _b, _h, _f = await client.inject(
+                            url, parameter, p, method=method, base_data=None
+                        )
+                except Exception:
+                    continue
+                if st != 0:
+                    delivered = True
+                    last_status = st
+            if delivered:
+                async with lock:
+                    result.blind_deliveries.append(
+                        {
+                            "url": url,
+                            "parameter": parameter,
+                            "method": method,
+                            "via": via,
+                            "oob": beacon_url(oob, marker),
+                            "marker": marker,
+                            "status": last_status,
+                        }
+                    )
+            return 1 if delivered else 0
+
+        count = 0
+        seen: set = set()
+        for t in targets:
+            for param in t.params or []:
+                key = (t.url.split("#")[0], t.method.upper(), param)
+                if key in seen:
+                    continue
+                seen.add(key)
+                count += await _record(t.url, param, t.method, "param")
+
+        if self.config.blind_header:
+            for name in self._BLIND_HEADERS:
+                count += await _record(target_url, name, "GET", "header")
+
+        if count:
+            self._log(
+                f"blind: delivered beacons to {count} point(s) at {base} "
+                f"— watch your collaborator for the ixm… marker",
+                "info",
+            )
+        else:
+            self._log("blind: no injection point accepted a beacon", "warn")
 
     async def _auth_setup(
         self, target_url: str, result: ScanResult
@@ -511,6 +654,41 @@ class Scanner:
     # stored / deep passes
     # ------------------------------------------------------------------
 
+    def _stored_render_pages(
+        self, seed_url: str, body: str, targets: List[ScanTarget]
+    ) -> List[str]:
+        """Same-origin pages where a stored record might surface.
+
+        The seed's own links plus the discovered GET pages, same-origin, minus
+        subresources — bounded, because each becomes one extra read per write.
+        A stored payload posted to one endpoint commonly renders on another of
+        these, and feeding them to the stored pass is what lets it correlate the
+        two without being told the render URL.
+        """
+        origin = urlparse(seed_url).netloc
+        seen: set = set()
+        pages: List[str] = []
+        candidates = list(extract_links(body or "", seed_url))
+        candidates += [
+            t.url
+            for t in targets
+            if str(getattr(t, "method", "GET")).upper() in ("GET", "HEAD")
+        ]
+        for raw in candidates:
+            u = (raw or "").split("#")[0]
+            p = urlparse(u)
+            if p.scheme not in ("http", "https") or p.netloc != origin:
+                continue
+            if _SKIP_RENDER_EXT.search(p.path):
+                continue
+            if u in seen:
+                continue
+            seen.add(u)
+            pages.append(u)
+            if len(pages) >= 20:
+                break
+        return pages
+
     async def _stored_pass(
         self,
         client: HttpClient,
@@ -518,6 +696,7 @@ class Scanner:
         targets: List[ScanTarget],
         result: ScanResult,
         lock: asyncio.Lock,
+        render_pages: Optional[List[str]] = None,
     ) -> None:
         # A form is a POST and the reflected pass already drove every one of
         # them on the page that carries it. An API sink is not a form:
@@ -572,6 +751,7 @@ class Scanner:
                     # confirmed by rendering the page that reads it back.
                     page_stages=not stored_already,
                     targets=targets,
+                    render_pages=render_pages or [],
                     log=self._log,
                 ),
                 timeout=_STORED_PASS_SECONDS,

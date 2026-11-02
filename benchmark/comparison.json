@@ -1,0 +1,326 @@
+{
+  "endpoints": {
+    "reflect_html": "html_text",
+    "reflect_attr": "attr_double",
+    "reflect_attr_sq": "attr_single",
+    "reflect_unquoted": "attr_unquoted",
+    "reflect_js": "js_string",
+    "reflect_filtered": "html_text_filtered",
+    "dom_query": "dom_query",
+    "hard_js_template": "js_template",
+    "trap_textarea": "rawtext_textarea",
+    "trap_title": "rawtext_title",
+    "trap_noscript": "noscript",
+    "trap_template": "template",
+    "hard_tag_block": "html_text_tagblock",
+    "hard_attr_events": "attr_double_eventblock",
+    "safe_escaped": "html_text_escaped",
+    "safe_attr_escaped": "attr_double_escaped",
+    "safe_noreflect": "no_reflection",
+    "trap_text_no_lt": "html_text_no_lt",
+    "trap_attr_quote_only": "attr_double_quote_escaped",
+    "trap_js_escaped": "js_string_escaped"
+  },
+  "vuln": [
+    "reflect_html",
+    "reflect_attr",
+    "reflect_attr_sq",
+    "reflect_unquoted",
+    "reflect_js",
+    "reflect_filtered",
+    "dom_query",
+    "hard_js_template",
+    "hard_tag_block",
+    "hard_attr_events"
+  ],
+  "clean": [
+    "trap_textarea",
+    "trap_title",
+    "trap_noscript",
+    "trap_template",
+    "safe_escaped",
+    "safe_attr_escaped",
+    "safe_noreflect",
+    "trap_text_no_lt",
+    "trap_attr_quote_only",
+    "trap_js_escaped"
+  ],
+  "tools": {
+    "intellixss": {
+      "true_positives": 10,
+      "vuln_total": 10,
+      "false_positives": 0,
+      "clean_total": 10,
+      "confirmed": 10,
+      "recall": 1.0,
+      "precision": 1.0,
+      "per_endpoint": {
+        "reflect_html": [
+          true,
+          true
+        ],
+        "reflect_attr": [
+          true,
+          true
+        ],
+        "reflect_attr_sq": [
+          true,
+          true
+        ],
+        "reflect_unquoted": [
+          true,
+          true
+        ],
+        "reflect_js": [
+          true,
+          true
+        ],
+        "reflect_filtered": [
+          true,
+          true
+        ],
+        "dom_query": [
+          true,
+          true
+        ],
+        "hard_js_template": [
+          true,
+          true
+        ],
+        "trap_textarea": [
+          false,
+          false
+        ],
+        "trap_title": [
+          false,
+          false
+        ],
+        "trap_noscript": [
+          false,
+          false
+        ],
+        "trap_template": [
+          false,
+          false
+        ],
+        "hard_tag_block": [
+          true,
+          true
+        ],
+        "hard_attr_events": [
+          true,
+          true
+        ],
+        "safe_escaped": [
+          false,
+          false
+        ],
+        "safe_attr_escaped": [
+          false,
+          false
+        ],
+        "safe_noreflect": [
+          false,
+          false
+        ],
+        "trap_text_no_lt": [
+          false,
+          false
+        ],
+        "trap_attr_quote_only": [
+          false,
+          false
+        ],
+        "trap_js_escaped": [
+          false,
+          false
+        ]
+      },
+      "seconds": 75.2
+    },
+    "dalfox": {
+      "true_positives": 10,
+      "vuln_total": 10,
+      "false_positives": 7,
+      "clean_total": 10,
+      "confirmed": 10,
+      "recall": 1.0,
+      "precision": 0.588,
+      "per_endpoint": {
+        "reflect_html": [
+          true,
+          true
+        ],
+        "reflect_attr": [
+          true,
+          true
+        ],
+        "reflect_attr_sq": [
+          true,
+          true
+        ],
+        "reflect_unquoted": [
+          true,
+          true
+        ],
+        "reflect_js": [
+          true,
+          true
+        ],
+        "reflect_filtered": [
+          true,
+          true
+        ],
+        "dom_query": [
+          true,
+          true
+        ],
+        "hard_js_template": [
+          true,
+          true
+        ],
+        "trap_textarea": [
+          true,
+          false
+        ],
+        "trap_title": [
+          true,
+          false
+        ],
+        "trap_noscript": [
+          true,
+          false
+        ],
+        "trap_template": [
+          true,
+          true
+        ],
+        "hard_tag_block": [
+          true,
+          true
+        ],
+        "hard_attr_events": [
+          true,
+          true
+        ],
+        "safe_escaped": [
+          false,
+          false
+        ],
+        "safe_attr_escaped": [
+          false,
+          false
+        ],
+        "safe_noreflect": [
+          false,
+          false
+        ],
+        "trap_text_no_lt": [
+          true,
+          false
+        ],
+        "trap_attr_quote_only": [
+          true,
+          false
+        ],
+        "trap_js_escaped": [
+          true,
+          false
+        ]
+      },
+      "seconds": 246.2
+    },
+    "xsstrike": {
+      "true_positives": 10,
+      "vuln_total": 10,
+      "false_positives": 0,
+      "clean_total": 10,
+      "confirmed": 0,
+      "recall": 1.0,
+      "precision": 1.0,
+      "per_endpoint": {
+        "reflect_html": [
+          true,
+          false
+        ],
+        "reflect_attr": [
+          true,
+          false
+        ],
+        "reflect_attr_sq": [
+          true,
+          false
+        ],
+        "reflect_unquoted": [
+          true,
+          false
+        ],
+        "reflect_js": [
+          true,
+          false
+        ],
+        "reflect_filtered": [
+          true,
+          false
+        ],
+        "dom_query": [
+          true,
+          false
+        ],
+        "hard_js_template": [
+          true,
+          false
+        ],
+        "trap_textarea": [
+          false,
+          false
+        ],
+        "trap_title": [
+          false,
+          false
+        ],
+        "trap_noscript": [
+          false,
+          false
+        ],
+        "trap_template": [
+          false,
+          false
+        ],
+        "hard_tag_block": [
+          true,
+          false
+        ],
+        "hard_attr_events": [
+          true,
+          false
+        ],
+        "safe_escaped": [
+          false,
+          false
+        ],
+        "safe_attr_escaped": [
+          false,
+          false
+        ],
+        "safe_noreflect": [
+          false,
+          false
+        ],
+        "trap_text_no_lt": [
+          false,
+          false
+        ],
+        "trap_attr_quote_only": [
+          false,
+          false
+        ],
+        "trap_js_escaped": [
+          false,
+          false
+        ]
+      },
+      "seconds": 117.4
+    }
+  }
+}

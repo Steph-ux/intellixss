@@ -126,6 +126,27 @@ def is_payload_effective(
     score_dec = reflection_score(decoded, payload)
     ctx = (context_hint or "html_text").lower()
 
+    # --- inert containers: <noscript> (scripting enabled) and <template> ---
+    # Their content is held as inert text / an inert fragment: a <script> or an
+    # onerror there never runs until the element is closed, which is exactly
+    # what a headless browser enforces and a character-survival metric cannot
+    # see. A payload inside one is only live if it closes the element and a tag
+    # follows, the same rule as a raw-text element.
+    inert = _inert_container(response, payload)
+    if inert:
+        return _rawtext_executable(payload, response, inert)
+
+    # --- raw-text elements and comments: must break out first ---
+    # Inside <textarea>/<title> the content is raw text and inside <!-- --> it
+    # is a comment: a <script>/<svg> there is inert until the payload closes the
+    # element (</textarea>, </title>) or the comment (-->). That closing token
+    # has to survive *raw* and sit right before live markup — the element's own
+    # closing tag at the end of the template does not count. A scanner that
+    # scores by character survival sees the tag and calls it executable; it is
+    # not, and this is where "reflected" and "executes" diverge.
+    if ctx in ("textarea", "title", "html_comment"):
+        return _rawtext_executable(payload, response, ctx)
+
     # --- href context: only navigable script URLs ---
     if ctx == "html_attr_href":
         if "javascript:" in payload.lower() and re.search(
@@ -473,6 +494,13 @@ def _inside_open_tag(response: str, payload: str) -> bool:
     # handler belongs inside text, not inside the earlier real tag.
     if window.rfind("&lt;") > last_lt:
         return False
+    # If that tag already closed — a ">" sits between its "<" and the handler —
+    # the handler is in text, not inside the tag. This is what a tag-name filter
+    # produces: `<svg/onload=alert(1)>` with `<svg` stripped leaves
+    # `<div>/onload=alert(1)>`, where `onload=` follows the div's own ">" and
+    # never becomes an attribute of any element.
+    if ">" in window[last_lt:]:
+        return False
     nxt = window[last_lt + 1:last_lt + 2]
     return bool(nxt) and (nxt.isalpha() or nxt in ("/", "!"))
 
@@ -675,6 +703,63 @@ def _js_string_breakout_executable(payload: str, decoded: str, ctx: str) -> bool
     return False
 
 
+def _inert_container(response: str, payload: str) -> str:
+    """``noscript`` / ``template`` if the payload reflects inside an open one.
+
+    With scripting enabled a browser treats ``<noscript>`` content as raw text,
+    and ``<template>`` content is parsed into an inert fragment: neither runs
+    markup placed in it. Detected by counting the element's unclosed openings
+    before the reflection, so the finding is gated on breaking out of it.
+    """
+    m = re.search(r"ixm[0-9a-f]{6,}", payload or "")
+    needle = m.group(0) if m else (payload or "").strip()[:24]
+    if not needle or not response:
+        return ""
+    low = response.lower()
+    pos = low.find(needle.lower())
+    if pos < 0:
+        return ""
+    head = low[:pos]
+    for el in ("noscript", "template"):
+        if len(re.findall(rf"<{el}\b", head)) > len(re.findall(rf"</{el}\b", head)):
+            return el
+    return ""
+
+
+def _rawtext_executable(payload: str, response: str, ctx: str):
+    """Executability inside a raw-text element or an HTML comment.
+
+    The only way out is to close the enclosing construct and then open live
+    markup: ``</textarea><svg onload=…>``, ``</title><img …>``, or ``--><svg…>``
+    for a comment. The closing token and the tag that follows it must appear
+    *raw and contiguous* in the response — a target that strips ``</textarea``
+    (or ``-->``) leaves the tag sitting inside the element, inert, even though
+    every character of the payload survived. Matching against the raw bytes,
+    and requiring the close to be adjacent to the opening tag, is what stops an
+    echo in a non-executing context from being read as a finding; the element's
+    own closing tag at the end of the template is never adjacent to the
+    payload's tag, so it cannot satisfy the match.
+    """
+    if ctx == "html_comment":
+        # Close the comment, then open a tag.
+        m = re.search(r"-->\s*<\s*([a-zA-Z][\w-]*)", payload)
+        if not m:
+            return False, "comment_not_broken_out"
+        sig = re.compile(r"-->\s*<\s*" + re.escape(m.group(1)), re.I)
+        if sig.search(response):
+            return True, "comment_breakout"
+        return False, "comment_close_stripped"
+
+    element = ctx  # "textarea" | "title"
+    m = re.search(rf"</\s*{element}\s*>\s*<\s*([a-zA-Z][\w-]*)", payload, re.I)
+    if not m:
+        return False, f"rawtext_{element}_not_broken_out"
+    sig = re.compile(r"</\s*" + element + r"\s*>\s*<\s*" + re.escape(m.group(1)), re.I)
+    if sig.search(response):
+        return True, f"rawtext_{element}_breakout"
+    return False, f"rawtext_{element}_close_stripped"
+
+
 def _attr_breakout_executable(
     payload: str, response: str, decoded: str, ctx: str
 ) -> bool:
@@ -685,40 +770,85 @@ def _attr_breakout_executable(
             return False
         body = response
 
-    # Event-handler breakout reflected as distinctive unit
+    # Event-handler breakout reflected as distinctive unit.
+    #
+    # The structural match is against the *raw* response, not the entity-decoded
+    # body: the delimiter quote and the handler have to survive unescaped to end
+    # the attribute. A target that escapes " to &quot; reflects `" onfocus=` as
+    # `&quot; onfocus=` — decoding that back to `" onfocus=` would read the
+    # neutralised quote as a real breakout, which is the false positive this
+    # guards against. ``_distinctive_reflection`` still runs against ``body`` as
+    # a presence check (the payload did reflect somewhere); only the delimiter
+    # structure is held to the raw bytes.
     if re.search(r"""["']\s*on[a-z]+\s*=""", payload, re.I):
         for m in re.finditer(
             r"""(["'])\s*(on[a-z]+)\s*=\s*(?:(["']?)(alert|prompt|confirm)|)""",
             payload,
             re.I,
         ):
-            # at least quote+handler in body
+            # at least quote+handler in the raw response
             if re.search(
-                rf"""{re.escape(m.group(1))}\s*{m.group(2)}\s*=""", body, re.I
+                rf"""{re.escape(m.group(1))}\s*{m.group(2)}\s*=""", response, re.I
             ) and _distinctive_reflection(payload, body):
                 # prefer alert binding when payload has it
                 if re.search(r"(?:alert|prompt|confirm)", payload, re.I):
                     if re.search(
-                        rf"{m.group(2)}\s*=\s*(?:alert|prompt|confirm)", body, re.I
+                        rf"{m.group(2)}\s*=\s*(?:alert|prompt|confirm)", response, re.I
                     ):
                         return True
                 else:
                     return True
-        # " onmouseover="alert(1) full payload
-        if payload in body or payload.strip() in body:
+        # " onmouseover="alert(1) full payload, delimiter intact in raw bytes
+        if payload in response or payload.strip() in response:
             return True
 
     # Tag injection after closing quote: "><img ...
-    if re.search(r"""["']\s*>""", payload) and (
-        payload in body or _distinctive_reflection(payload, body)
-    ):
-        if '"><' in body or "'><" in body or re.search(r"""["']\s*>\s*<""", body):
+    #
+    # The quote that closes the attribute has to survive *unencoded*, or the
+    # tag never escapes the value. A target that turns " into &quot; leaves
+    # `"><script>` reflected as `&quot;><script>`: the script sits inside the
+    # attribute and never parses. The old check looked for `"><` anywhere in
+    # the body, which also matches the page's own `value="...">` markup — so a
+    # safely-escaped reflection was read as a breakout. Instead require the
+    # payload's *own* signature — its literal quote, then `>`, then the tag it
+    # opens — to appear in the body, anchored to the payload's marker where one
+    # exists, so an ambient `"><tag` elsewhere on the page cannot stand in for a
+    # breakout that did not happen.
+    #
+    # The signature is matched against the *raw* response, never the
+    # entity-decoded one: inside value="...", &quot; decodes to a " that is
+    # part of the value's text, not a delimiter that ends the attribute. Judging
+    # the breakout on the decoded body would read that escaped quote as a real
+    # one — exactly the false positive this guards against.
+    mbo = re.search(r"""(["'])\s*>\s*<\s*([a-zA-Z][\w-]*)""", payload)
+    if mbo and (payload in body or _distinctive_reflection(payload, body)):
+        quote = re.escape(mbo.group(1))
+        tag = re.escape(mbo.group(2))
+        marker = re.search(r"ixm[0-9a-f]{6,}", payload)
+        if marker:
+            sig = re.compile(
+                quote + r"""\s*>\s*<\s*""" + tag + r""".{0,300}?""" + re.escape(marker.group(0)),
+                re.I | re.S,
+            )
+        else:
+            sig = re.compile(quote + r"""\s*>\s*<\s*""" + tag, re.I)
+        if sig.search(response):
             return True
 
-    if re.search(r"""["']\s*(?:autofocus\s+)?on[a-z]+""", payload, re.I) and (
+    # Quote break-out into an attribute/event (``" autofocus onfocus=alert``).
+    # Held to the raw response and anchored to the delimiter quote: the handler
+    # binding must follow a *raw* quote that ended the attribute. Matching the
+    # decoded body here (as this branch once did) let an escaped `&quot;` —
+    # which never ends the attribute — stand in for a break-out, flagging a
+    # value that only reflected safely inside quotes.
+    if re.search(r"""["']\s*(?:[a-z]+\s+)*on[a-z]+""", payload, re.I) and (
         payload in body or _distinctive_reflection(payload, body)
     ):
-        if re.search(r"""\bon[a-z]+\s*=\s*(?:alert|prompt|confirm)""", body, re.I):
+        if re.search(
+            r"""["']\s*(?:[a-z-]+(?:=\S*)?\s+)*on[a-z]+\s*=\s*(?:alert|prompt|confirm)""",
+            response,
+            re.I,
+        ):
             return True
 
     return False

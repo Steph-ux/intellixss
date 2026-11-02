@@ -1,0 +1,72 @@
+"""Multi-page site for the root-only discovery benchmark.
+
+The reflected XSS lives on /search?q= — a GET search box reachable only by
+following a link from the index, the shape a real site takes. A scanner given
+only the root has to *crawl* to reach it; one that scans a single URL, or whose
+crawler only looks for forms, never sees it.
+
+Run: python bench/crawl_range.py [port]   (default 8890)
+"""
+from __future__ import annotations
+
+import sys
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import urlsplit, parse_qs
+
+
+def _page(inner: str) -> bytes:
+    return f"<!doctype html><html><body>{inner}</body></html>".encode()
+
+
+class Handler(BaseHTTPRequestHandler):
+    def log_message(self, *a):
+        pass
+
+    def _send(self, body: bytes, status: int = 200):
+        self.send_response(status)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_GET(self):
+        u = urlsplit(self.path)
+        q = parse_qs(u.query)
+        if u.path == "/":
+            self._send(_page(
+                "<h1>Home</h1>"
+                "<a href='/about'>About</a> "
+                "<a href='/search'>Search</a> "
+                "<a href='/products?category=electronics'>Products</a>"
+            ))
+        elif u.path == "/about":
+            # The feedback form is two hops from the root (/ -> /about -> form).
+            self._send(_page(
+                "<p>About us.</p> <a href='/search?q=hello'>search hello</a> "
+                "<a href='/feedback'>Leave feedback</a>"
+            ))
+        elif u.path == "/search":
+            self._send(_page(f"<h1>Results</h1><div>{q.get('q', [''])[0]}</div>"))  # XSS
+        elif u.path == "/products":
+            # A link-only GET filter param, one hop from the root.
+            self._send(_page(f"<h1>Products</h1><div>{q.get('category', [''])[0]}</div>"))  # XSS
+        elif u.path == "/feedback":
+            if "comment" in q:
+                self._send(_page(f"<div>{q.get('comment', [''])[0]}</div>"))  # XSS
+            else:
+                self._send(_page(
+                    "<form action='/feedback' method='get'><input name='comment'></form>"
+                ))
+        else:
+            self._send(b"not found", status=404)
+
+
+def main():
+    port = int(sys.argv[1]) if len(sys.argv) > 1 else 8890
+    srv = ThreadingHTTPServer(("127.0.0.1", port), Handler)
+    print(f"crawl range on http://127.0.0.1:{port}  (XSS at /search?q=, linked from /)")
+    srv.serve_forever()
+
+
+if __name__ == "__main__":
+    main()

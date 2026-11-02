@@ -332,3 +332,107 @@ def test_img_onerror_alert_confirmed_when_distinctive_binding_present():
     body = f"<html><body>{payload}</body></html>"
     ok, tag = is_payload_effective(body, payload, "html_text")
     assert ok, tag
+
+
+# --- precision: a quoted-attribute reflection is only a finding if the
+#     delimiter quote itself survives raw (surfaced by the scanner benchmark) ---
+
+def test_attr_quote_escaped_is_not_a_breakout():
+    """`"` encoded to `&quot;` cannot end a double-quoted attribute.
+
+    The payload's `"` is the only thing that could close value="..." and let the
+    tag parse; when the target returns it as `&quot;`, the markup is inert text
+    inside the value. Entity-decoding the body would turn `&quot;` back into a
+    `"` and read a break-out that never happens, so the check must hold to the
+    raw bytes. This is the false positive the three-way benchmark caught.
+    """
+    marker = "ixmdeadbe"
+    for payload in (
+        f'"><script>alert(\'{marker}\')</script>',
+        f'<xss title="x" onfocus=alert(\'{marker}\')>',
+        f'" autofocus onfocus=alert(\'{marker}\')',
+    ):
+        escaped = payload.replace('"', "&quot;")
+        body = f'<input type=text value="{escaped}">'
+        ok, tag = is_payload_effective(body, payload, "html_attr_double")
+        assert not ok, f"escaped quote wrongly read as breakout: {payload!r} -> {tag}"
+
+
+def test_attr_breakout_with_raw_quote_is_executable():
+    """When the quote survives raw, the same payloads are real break-outs."""
+    marker = "ixmdeadbe"
+    for payload in (
+        f'"><svg onload=alert(\'{marker}\')>',
+        f'" autofocus onfocus=alert(\'{marker}\')',
+    ):
+        body = f'<input type=text value="{payload}">'  # quote reflected raw
+        ok, _tag = is_payload_effective(body, payload, "html_attr_double")
+        assert ok, f"raw-quote breakout missed: {payload!r}"
+
+
+def test_event_handler_remnant_without_a_tag_is_not_executable():
+    """A tag-name filter can leave `on...=` sitting in text, with no element.
+
+    `<svg/onload=alert(1)>` with `<svg` stripped reflects as
+    `<div>/onload=alert(1)>`: the handler follows the div's own `>` and is plain
+    text, so nothing executes. Reading it as effective made the scanner settle
+    on a dead payload instead of escalating to a tag that survives the filter.
+    """
+    marker = "ixmdeadbe"
+    body = f"<div>/onload=alert('{marker}')></div>"  # <svg stripped
+    ok, tag = is_payload_effective(body, f"<svg/onload=alert('{marker}')>", "html_text")
+    assert not ok, f"tagless handler remnant wrongly executable: {tag}"
+    # The surviving alternative a filter-aware scan escalates to is still live.
+    live = f"<div><img src=x onerror=alert('{marker}')></div>"
+    ok2, _ = is_payload_effective(live, f"<img src=x onerror=alert('{marker}')>", "html_text")
+    assert ok2
+
+
+def test_rawtext_reflection_without_breakout_is_not_executable():
+    """Inside <textarea>/<title>/comment, markup is inert until the element is
+    closed, and that close must survive raw.
+
+    A char-survival metric sees `<script>` and calls it executable; it is not,
+    because it sits in raw text. Surfaced by the benchmark's textarea/title
+    traps, where the closing tag is stripped.
+    """
+    m = "ixmdead01"
+    ta = f"<body><textarea><script>alert('{m}')</script></textarea></body>"
+    assert not is_payload_effective(ta, f"<script>alert('{m}')</script>", "textarea")[0]
+    # Even a payload that *tries* to close is inert when the close is stripped.
+    ta2 = f"<body><textarea>><svg onload=alert('{m}')></textarea></body>"  # </textarea stripped
+    assert not is_payload_effective(ta2, f"</textarea><svg onload=alert('{m}')>", "textarea")[0]
+    # When the close survives raw and a live tag follows, it is executable.
+    real = f"<body><textarea></textarea><svg onload=alert('{m}')></textarea></body>"
+    assert is_payload_effective(real, f"</textarea><svg onload=alert('{m}')>", "textarea")[0]
+
+
+def test_comment_reflection_needs_a_surviving_close():
+    m = "ixmdead01"
+    # Payload never closes the comment: the <svg> stays inside it, inert.
+    trap = f"<body><!--<svg onload=alert('{m}')>--></body>"
+    assert not is_payload_effective(trap, f"<svg onload=alert('{m}')>", "html_comment")[0]
+    # Payload tried to close but `-->` was stripped: no `--><tag` survives raw.
+    trap2 = f"<body><!--<svg onload=alert('{m}')>--></body>"  # --> from payload stripped
+    assert not is_payload_effective(trap2, f"--><svg onload=alert('{m}')>", "html_comment")[0]
+    # The close survives raw, adjacent to a live tag: executable.
+    real = f"<body><!--x--><svg onload=alert('{m}')></body>"
+    assert is_payload_effective(real, f"--><svg onload=alert('{m}')>", "html_comment")[0]
+
+
+def test_inert_container_reflection_is_not_executable():
+    """<noscript> (JS on) and <template> hold inert content: not a finding.
+
+    A character-survival metric sees the payload intact and flags it; a browser
+    never runs it. IntelliXSS must agree with the browser. Surfaced by the
+    benchmark's noscript/template controls, where XSStrike false-positives.
+    """
+    m = "ixmdead01"
+    for el in ("noscript", "template"):
+        body = f"<body><{el}><img src=x onerror=alert('{m}')></{el}></body>"
+        ok, tag = is_payload_effective(body, f"<img src=x onerror=alert('{m}')>", "html_text")
+        assert not ok, f"{el} content wrongly executable: {tag}"
+    # Breaking out of the container (close it, then a live tag) is executable.
+    body = f"<body><noscript></noscript><svg onload=alert('{m}')></body>"
+    ok, _ = is_payload_effective(body, f"</noscript><svg onload=alert('{m}')>", "html_text")
+    assert ok
