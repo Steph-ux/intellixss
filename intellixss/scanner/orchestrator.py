@@ -3045,10 +3045,17 @@ def _finding_key(f: XSSFinding) -> str:
     """
     from urllib.parse import urlparse
 
-    path = urlparse(f.url).path if f.url else ""
+    # Normalise the endpoint: an empty path and "/" are the same resource
+    # (``host?s=`` vs ``host/?s=``), so they must key alike or one flaw is
+    # reported twice. The host is part of the endpoint's identity — leaving it
+    # out collapses same-path findings across different hosts/subdomains during
+    # a crawl, dropping real results.
+    parsed = urlparse(f.url) if f.url else None
+    netloc = (parsed.netloc or "").lower() if parsed else ""
+    path = ((parsed.path or "/") if parsed else "").rstrip("/") or "/"
     payload = re.sub(r"ixm[0-9a-f]{6,}", "ixm*", f.payload or "")
     return (
-        f"{path}|{f.parameter}|{f.method}|{payload}|"
+        f"{netloc}|{path}|{f.parameter}|{f.method}|{payload}|"
         f"{f.vulnerability_type}|{f.context.value}"
     )
 
